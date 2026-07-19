@@ -1,0 +1,21 @@
+# colcon 빌드 산출물 (워크스페이스 루트)
+build/
+install/
+log/
+
+# Python
+__pycache__/
+*.pyc
+
+# 서브모듈 대신 로컬 관리하는 외부 레포 (버전 추적 안 함)
+src/doosan-robot2/
+src/onrobot_rg2/
+
+# Isaac Sim 실험용 스크립트 (개인 작업 공간, 공유용 아님)
+isaacpjt/
+
+# 에디터
+.vscode/
+
+# Claude Code 로컬 설정 (개인 머신 전용)
+.claude/settings.local.json
