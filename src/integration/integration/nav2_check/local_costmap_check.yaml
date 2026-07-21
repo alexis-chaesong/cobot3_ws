@@ -1,0 +1,58 @@
+# local_costmap_check.yaml
+# ============================================================================
+# 작업 0 검증용 : 맵(SLAM) 없이 라이다 /scan 만으로 "복도 벽"이 costmap 에
+# 장애물로 잡히는지 확인하기 위한 독립 실행 costmap_2d 노드 설정.
+#
+# 핵심
+#   - global_frame = odom  → map(정적 맵) 불필요. Isaac 이 odom→base_link TF 만
+#     내보내면 됨. (map→odom 은 AMCL/SLAM 필요 → 이번 범위 밖)
+#   - rolling_window = true → 로봇 주변만 롤링. 맵 경계 필요 없음.
+#   - obstacle_layer 가 /scan(LaserScan)을 받아 벽을 marking.
+#
+# 실행 : costmap_check.launch.py 가 이 파일을 로드하고 lifecycle 을 autostart.
+# 노드 이름은 nav2_costmap_2d 독립 노드 기본값인 "costmap".
+# ============================================================================
+costmap:
+  costmap:
+    ros__parameters:
+      use_sim_time: true            # Isaac /clock 사용 (bridge 에서 발행돼야 함)
+
+      update_frequency: 5.0
+      publish_frequency: 2.0
+      global_frame: odom
+      robot_base_frame: base_link
+      rolling_window: true
+      width: 12
+      height: 12
+      resolution: 0.05
+      robot_radius: 0.30            # Nova Carter 대략 반경 (footprint 로 바꿔도 됨)
+      track_unknown_space: true
+
+      plugins: ["obstacle_layer", "inflation_layer"]
+
+      obstacle_layer:
+        plugin: "nav2_costmap_2d::ObstacleLayer"
+        enabled: true
+        observation_sources: scan
+        scan:
+          # Nova_Carter_ROS.usd 내장 그래프의 전방 2D RPLidar (frame_id=front_2d_lidar)
+          topic: /front_2d_lidar/scan
+          sensor_frame: ""           # 비우면 LaserScan header.frame_id 사용
+          data_type: "LaserScan"
+          marking: true
+          clearing: true
+          max_obstacle_height: 2.0
+          min_obstacle_height: 0.0
+          obstacle_max_range: 12.0
+          obstacle_min_range: 0.0
+          raytrace_max_range: 13.0
+          raytrace_min_range: 0.0
+          inf_is_valid: true
+
+      inflation_layer:
+        plugin: "nav2_costmap_2d::InflationLayer"
+        enabled: true
+        inflation_radius: 0.55
+        cost_scaling_factor: 3.0
+
+      always_send_full_costmap: true
