@@ -8,18 +8,17 @@ ASSET_ROOT = "/World/ClothAsset"      # <- /World 밑으로 통일
 MESH_PATH = f"{ASSET_ROOT}/mesh"
 PS_PATH = f"{ASSET_ROOT}/particleSystem"
 
-WIDTH = 0.04
-HEIGHT = 0.04
-U_PATCHES = 20
-V_PATCHES = 20
+WIDTH = 0.40
+HEIGHT = 0.40
+U_PATCHES = 80
+V_PATCHES = 80
+CONTACT_OFFSET = 0.003
+REST_OFFSET = 0.002
+PARTICLE_CONTACT_OFFSET = 0.003
+SOLID_REST_OFFSET = 0.002
+SOLVER_POSITION_ITERATION_COUNT = 20
 
-CONTACT_OFFSET = 0.0012
-REST_OFFSET = 0.0008
-PARTICLE_CONTACT_OFFSET = 0.0012
-SOLID_REST_OFFSET = 0.0008
-SOLVER_POSITION_ITERATION_COUNT = 16
-
-EXPORT_PATH = "/home/cobot3_ws/src/ClothAsset/usd/cloth_pad.usd"
+EXPORT_PATH = "/home/rokey/cobot3_ws/src/asset/scenes/cloth_pad.usd"        # 파일 명을 바꿔서 다시 저장할거면 cloth_pad를 원하는 이름으로 바꾸면됨
 # ============================================================
 
 
