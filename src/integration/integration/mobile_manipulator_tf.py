@@ -39,11 +39,13 @@ class MobileManipulatorTF(Node):
         tf.child_frame_id = 'base_link'              # 자식: 로봇 팔 베이스
 
         # 아래 값은 mobile_manipulator_sg.usd의 /World/m0609/root_joint
-        # (body0=chassis_link, body1=base_link) localPos0를 직접 조회해서 맞춘 값이다
-        # (이전에는 z=0.577로 잘못 하드코딩되어 있었음 — 실제로는 0.55208474).
+        # (body0=chassis_link, body1=base_link) localPos0와 일치시킨 값이다.
+        # 원래 z=0.55208474였는데, move_tash_can.usd 테스트에서 팔 아래쪽이
+        # lidar에 걸리는 문제가 확인되어 z=0.577로 마운트 높이를 올렸다
+        # (mobile_manipulator_sg.usd / move_tash_can.usd의 root_joint도 함께 수정).
         tf.transform.translation.x = -0.2317
         tf.transform.translation.y = 0.0
-        tf.transform.translation.z = 0.55208474
+        tf.transform.translation.z = 0.577
 
         # 회전 없음 (팔이 카터와 같은 방향)
         tf.transform.rotation.x = 0.0
