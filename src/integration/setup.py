@@ -24,6 +24,7 @@ setup(
     },
     entry_points={
         'console_scripts': [
+            'mobile_manipulator_tf = integration.mobile_manipulator_tf:main',
         ],
     },
 )
