@@ -25,8 +25,10 @@ setup(
     entry_points={
         'console_scripts': [
             'nav_to_pose = commander.nav_to_pose:main',
+            'spray_waypoint_mission = commander.spray_waypoint_mission:main',
             'trash_can_nav_pick_mission = commander.trash_can_nav_pick_mission:main',
-            'trash_can_nav_pick_mission_v2 = commander.trash_can_nav_pick_mission_v2:main',
+            'tf_relay = commander.tf_relay:main',
+            'pc_reframe = commander.pc_reframe:main',
         ],
     },
 )

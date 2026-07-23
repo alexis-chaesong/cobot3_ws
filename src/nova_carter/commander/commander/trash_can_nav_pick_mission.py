@@ -19,6 +19,7 @@ use_sim_time Nav2 노드들이 그 /clock 을 기다리며 같이 멈춰버린�
 import math
 
 import rclpy
+from rclpy.node import Node
 from geometry_msgs.msg import PoseStamped
 from std_msgs.msg import Bool
 from nav2_simple_commander.robot_navigator import BasicNavigator, TaskResult
@@ -38,11 +39,22 @@ NAV_GOAL_TOPIC = "/trash_can_nav_goal"
 START_PICK_TOPIC = "/start_pick"
 
 
+def _read_namespace():
+    """BasicNavigator 는 생성 시점에 namespace 가 필요하므로(액션 서버 이름 결정),
+    본 네비게이터를 만들기 전에 임시 노드로 'namespace' 파라미터만 먼저 읽는다.
+    빈 문자열이면 단일로봇(기존 동작). 'carter2' 면 폐기물 로봇 멀티로봇 운용."""
+    tmp = Node("trash_can_nav_pick_param_reader")
+    tmp.declare_parameter("namespace", "")
+    ns = str(tmp.get_parameter("namespace").value).strip("/")
+    tmp.destroy_node()
+    return ns
+
+
 def get_quaternion_from_euler(roll, pitch, yaw):
     qx = math.sin(roll / 2) * math.cos(pitch / 2) * math.cos(yaw / 2) - math.cos(roll / 2) * math.sin(pitch / 2) * math.sin(yaw / 2)
     qy = math.cos(roll / 2) * math.sin(pitch / 2) * math.cos(yaw / 2) + math.sin(roll / 2) * math.cos(pitch / 2) * math.sin(yaw / 2)
     qz = math.cos(roll / 2) * math.cos(pitch / 2) * math.sin(yaw / 2) - math.sin(roll / 2) * math.sin(pitch / 2) * math.cos(yaw / 2)
-    qw = math.cos(roll / 2) * math.cos(pitch / 2) * math.cos(yaw / 2) + math.sin(roll / 2) * math.sin(pitch / 2) * math.sin(yaw / 2)
+    qw = math.cos(roll / 2) * math.cos(pitch / 2) * math.cos(yaw / 2) + math.sin(roll / 2) * math.sin(pitch / 2) * math.sin(yaw / 2)  # [태성] 표준 ZYX 공식(끝항 sin)
     return [qx, qy, qz, qw]
 
 
@@ -62,7 +74,20 @@ def create_pose(navigator, x, y, yaw_deg):
 
 def main():
     rclpy.init()
-    nav = BasicNavigator()
+
+    ns = _read_namespace()
+    # namespace 있으면 Nav2 액션/토픽이 /carter2/ 로 접두되므로 BasicNavigator 도 같은
+    # namespace 로 생성해야 goToPose 가 /carter2/navigate_to_pose 등과 통신한다.
+    # 조율 토픽(goal/pick)도 /carter2/ 로 붙여 Isaac 통합 스크립트 carter2 쪽과 짝을 맞춘다.
+    if ns:
+        nav = BasicNavigator(namespace=ns)
+        goal_topic = f"/{ns}/trash_can_nav_goal"
+        pick_topic = f"/{ns}/start_pick"
+    else:
+        nav = BasicNavigator()
+        goal_topic = NAV_GOAL_TOPIC
+        pick_topic = START_PICK_TOPIC
+    print(f"[NS] namespace='{ns or '(none)'}' → goal_sub='{goal_topic}', pick_pub='{pick_topic}'")
 
     init_pose = create_pose(nav, *CARTER_START_POSE)
     nav.setInitialPose(init_pose)
@@ -73,8 +98,8 @@ def main():
     def on_goal(msg):
         goal_holder["pose"] = msg
 
-    nav.create_subscription(PoseStamped, NAV_GOAL_TOPIC, on_goal, 10)
-    pick_pub = nav.create_publisher(Bool, START_PICK_TOPIC, 10)
+    nav.create_subscription(PoseStamped, goal_topic, on_goal, 10)
+    pick_pub = nav.create_publisher(Bool, pick_topic, 10)
 
     # Isaac Sim 스크립트가 여러 구간(소형 쓰레기통 파지 -> big_trash 덤프 -> 이후 추가될
     # 원위치 복귀/도킹 복귀)마다 같은 토픽에 새 목표를 퍼블리시하므로, 한 번 처리하고
