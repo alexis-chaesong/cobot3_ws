@@ -11,9 +11,6 @@ __pycache__/
 src/doosan-robot2/
 src/onrobot_rg2/
 
-# Isaac Sim 실험용 스크립트 (개인 작업 공간, 공유용 아님)
-isaacpjt/
-
 # 에디터
 .vscode/
 
