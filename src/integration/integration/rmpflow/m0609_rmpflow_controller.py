@@ -3,6 +3,7 @@ from pathlib import Path
 import numpy as np
 import omni.usd
 import isaacsim.robot_motion.motion_generation as mg
+from isaacsim.core.api.objects import GroundPlane
 from isaacsim.core.prims import SingleArticulation
 
 
@@ -75,6 +76,21 @@ class RMPFlowController(mg.MotionPolicyController):
             self._articulation_motion_policy._robot_articulation.get_dof_index(name)
             for name in self._arm_dof_names
         ]
+
+    def add_ground_plane(self, prim_path: str = "/World/GroundPlane", z_position: float = 0.0) -> bool:
+        """바닥을 RMPflow 장애물로 등록한다. 이 컨트롤러는 target-tracking IK 만 하고
+        world 장애물은 전혀 등록하지 않았어서, IK 가 바닥 아래로 팔을 뚫고 지나가도
+        모르는 상태였다 (add_obstacle/add_ground_plane 을 한 번도 호출한 적이 없었음).
+
+        prim_path 가 이미 존재하면(예: move_tash_can.usd 에 이미 있는 /World/GroundPlane)
+        그 prim 을 그대로 wrap 하고, 없으면 z_position 높이에 새로 만든다. Lula 는 ground
+        plane 을 직접 지원하지 않아 내부적으로 보이지 않는 큰 cuboid(기본 50x50m)를 그
+        높이에 맞춰 만들어 static 장애물로 등록한다 — static 장애물은 set_robot_base_pose()
+        가 호출될 때마다(우리 쪽 sync_rmpflow_base_pose) 자동으로 robot-base 기준 상대
+        위치가 재계산되므로, Nav2 로 로봇이 이동해도 별도 갱신 없이 계속 올바르게 유지된다.
+        """
+        ground_plane = GroundPlane(prim_path=prim_path, z_position=z_position)
+        return self.rmp_flow.add_ground_plane(ground_plane)
 
     def forward(self, *args, **kwargs):
         action = super().forward(*args, **kwargs)

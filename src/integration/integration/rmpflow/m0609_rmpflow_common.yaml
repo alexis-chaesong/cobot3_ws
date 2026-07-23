@@ -61,7 +61,12 @@ rmp_params:
         damping_velocity_gate_length_scale: 0.01
         repulsion_gain: 800.
         repulsion_std_dev: 0.02
-        metric_modulation_radius: 0.5
+        # 0.5 였을 때, 바닥(ground plane) 장애물 반경 0.5m 이내에서 목표추종 RMP 의
+        # 메트릭(우선순위)이 낮아져, 쓰레기통 파지처럼 원래 바닥 근처(17~30cm)에서
+        # 이뤄지는 작업 전체가 이 반경에 걸려 IK 가 목표에 수렴 못하는 문제가 있었다.
+        # 실제 접촉 직전에만 반응하도록 낮춤 (repulsion_std_dev=0.02 로 반발력 자체는
+        # 이미 짧은 거리에서만 작용하니, 이 값도 비슷한 스케일로 맞춘다).
+        metric_modulation_radius: 0.1
         metric_scalar: 10000.
         metric_exploder_std_dev: 0.02
         metric_exploder_eps: 0.001
