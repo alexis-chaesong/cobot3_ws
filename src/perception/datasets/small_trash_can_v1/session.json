@@ -1,0 +1,12 @@
+{
+  "created_at": "2026-07-22T00:15:52.345750+00:00",
+  "usd_path": "/home/rokey/cobot3_ws/src/assets/scenes/mobile_manipulator_with_yolov11s_v1.usd",
+  "realsense_prim": "/World/m0609/link_5/realsense_d455/RSD455/Camera_OmniVision_OV9782_Color",
+  "yolo_model": "/home/rokey/cobot3_ws/src/perception/models/yolo11s.pt",
+  "class_name": "small_trash_can",
+  "resolution": [
+    640,
+    480
+  ],
+  "orbit_views": 72
+}

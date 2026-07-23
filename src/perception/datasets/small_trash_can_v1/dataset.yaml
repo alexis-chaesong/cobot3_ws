@@ -1,0 +1,5 @@
+path: /home/rokey/cobot3_ws/src/perception/datasets/small_trash_can_v1
+train: images/raw
+val: images/raw
+names:
+  0: small_trash_can
