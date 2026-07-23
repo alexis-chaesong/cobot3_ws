@@ -1,0 +1,52 @@
+{
+  "created_at": "2026-07-22T00:27:22.433330+00:00",
+  "camera_ok": true,
+  "frames_requested": 8,
+  "frames_ok": 8,
+  "detections": 0,
+  "mean_brightness": 88.33661092122395,
+  "weights": "/home/rokey/cobot3_ws/src/perception/models/small_trash_can_yolo11s.pt",
+  "output_dir": "/home/rokey/cobot3_ws/src/perception/datasets/camera_check",
+  "records": [
+    {
+      "frame": 0,
+      "brightness": 88.32683919270833,
+      "detection": null
+    },
+    {
+      "frame": 1,
+      "brightness": 88.33871202256944,
+      "detection": null
+    },
+    {
+      "frame": 2,
+      "brightness": 88.32941080729167,
+      "detection": null
+    },
+    {
+      "frame": 3,
+      "brightness": 88.33587565104166,
+      "detection": null
+    },
+    {
+      "frame": 4,
+      "brightness": 88.33886501736112,
+      "detection": null
+    },
+    {
+      "frame": 5,
+      "brightness": 88.34457573784722,
+      "detection": null
+    },
+    {
+      "frame": 6,
+      "brightness": 88.3397970920139,
+      "detection": null
+    },
+    {
+      "frame": 7,
+      "brightness": 88.33881184895833,
+      "detection": null
+    }
+  ]
+}
