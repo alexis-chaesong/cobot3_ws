@@ -25,6 +25,8 @@ setup(
     entry_points={
         'console_scripts': [
             'nav_to_pose = commander.nav_to_pose:main',
+            'trash_can_nav_pick_mission = commander.trash_can_nav_pick_mission:main',
+            'trash_can_nav_pick_mission_v2 = commander.trash_can_nav_pick_mission_v2:main',
         ],
     },
 )
