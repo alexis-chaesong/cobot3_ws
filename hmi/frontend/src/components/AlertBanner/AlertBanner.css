@@ -1,0 +1,29 @@
+.alert-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 14px 18px;
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--state-error) 10%, var(--surface-panel));
+  border: 1px solid var(--state-error);
+  color: var(--state-error);
+}
+.alert-banner__icon {
+  flex: 0 0 auto;
+  margin-top: 1px;
+}
+.alert-banner__body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.alert-banner__line {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  font-size: 13px;
+  color: var(--ink);
+}
+.alert-banner__line strong {
+  color: var(--state-error);
+}

@@ -1,0 +1,71 @@
+/* 전역 리셋 + 레이아웃 기본값. 컴포넌트별 CSS는 각 폴더에 둔다. */
+@import "./tokens.css";
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  font-family: var(--font-ui);
+  color: var(--ink);
+  background: var(--surface-page);
+  font-size: 14px;
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+}
+
+button {
+  font-family: inherit;
+  cursor: pointer;
+}
+
+h1,
+h2,
+h3,
+h4,
+p {
+  margin: 0;
+}
+
+/* ── 앱 전체 레이아웃 (데스크톱 고정) ── */
+.app-shell {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap-lane);
+  min-height: 100%;
+  padding: var(--gap-lane);
+  max-width: 1680px;
+  margin: 0 auto;
+}
+
+/* 2열 그리드 (로봇 레인 / 모니터링 / 운영) 공통 */
+.grid-2col {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--gap-lane);
+}
+
+/* 재사용 패널 카드 */
+.panel {
+  background: var(--surface-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-panel);
+}
+
+.panel-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}

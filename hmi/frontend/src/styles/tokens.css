@@ -1,0 +1,38 @@
+/* ══════════════════════════════════════════════════════════════
+   디자인 토큰 — 색/폰트의 단일 원천(single source of truth).
+   🔧 튜닝: 색을 바꾸고 싶으면 여기 값만 수정하면 전체에 반영됩니다.
+   ══════════════════════════════════════════════════════════════ */
+:root {
+  /* 표면(배경) 계열 */
+  --surface-page: #f6f8f8;
+  --surface-panel: #ffffff;
+  --border: #dce3e7;
+
+  /* 텍스트 */
+  --ink: #1d2b33;
+  --ink-muted: #5c7079;
+
+  /* 폐기물 수거 로봇 = red 계열 (실제 도킹 스테이션 색과 일치) */
+  --waste-accent: #b3433f;
+  --waste-tint: #fbebea;
+
+  /* 소독 로봇 = blue 계열 */
+  --disinfect-accent: #2f6690;
+  --disinfect-tint: #e8f1f7;
+
+  /* 로봇 상태 색 */
+  --state-running: #1c8577;
+  --state-idle: #888780;
+  --state-error: #c81e3a; /* ⚠ 긴급정지 전용. 다른 요소에 절대 재사용 금지 */
+
+  /* 폰트 */
+  --font-ui: "IBM Plex Sans", -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-mono: "IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
+
+  /* ── 파생 토큰 (기획 외 추가: 간격/모서리/그림자 일관성) ── */
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --gap-lane: 16px;
+  --shadow-panel: 0 1px 2px rgba(29, 43, 51, 0.06),
+    0 2px 8px rgba(29, 43, 51, 0.04);
+}

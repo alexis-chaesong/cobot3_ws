@@ -1,0 +1,100 @@
+.robot-lane {
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  --accent: var(--state-idle);
+  --tint: var(--surface-page);
+}
+.robot-lane--waste {
+  --accent: var(--waste-accent);
+  --tint: var(--waste-tint);
+}
+.robot-lane--disinfect {
+  --accent: var(--disinfect-accent);
+  --tint: var(--disinfect-tint);
+}
+
+/* 좌측에 로봇 색 띠 */
+.robot-lane {
+  border-top: 3px solid var(--accent);
+}
+
+.robot-lane__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.robot-lane__title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.robot-lane__title h2 {
+  font-size: 16px;
+  font-weight: 700;
+}
+.robot-lane__badge {
+  width: 12px;
+  height: 12px;
+  border-radius: 3px;
+  background: var(--accent);
+}
+
+/* 상태 pill */
+.robot-lane__state {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: var(--surface-page);
+  color: var(--state-idle);
+}
+.robot-lane__state--running {
+  color: var(--state-running);
+  background: color-mix(in srgb, var(--state-running) 12%, transparent);
+}
+.robot-lane__state--idle {
+  color: var(--state-idle);
+}
+.robot-lane__state--error {
+  color: var(--state-error);
+  background: color-mix(in srgb, var(--state-error) 12%, transparent);
+}
+.robot-lane__state--stopped {
+  color: var(--ink-muted);
+}
+
+.robot-lane__process {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--ink);
+  background: var(--tint);
+  padding: 8px 12px;
+  border-radius: var(--radius-sm);
+}
+
+.robot-lane__foot {
+  margin-top: auto;
+}
+.robot-lane__start {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #fff;
+  background: var(--accent);
+  border: none;
+  border-radius: var(--radius-sm);
+  padding: 8px 14px;
+}
+.robot-lane__start:hover {
+  filter: brightness(0.94);
+}
+.robot-lane__start:active {
+  filter: brightness(0.88);
+}
