@@ -17,12 +17,15 @@ use_sim_time Nav2 노드들이 그 /clock 을 기다리며 같이 멈춰버린�
 --------------------------------------------------
 """
 import math
+import time
 
 import rclpy
 from rclpy.node import Node
-from geometry_msgs.msg import PoseStamped
+from geometry_msgs.msg import PoseStamped, Twist
 from std_msgs.msg import Bool
 from nav2_simple_commander.robot_navigator import BasicNavigator, TaskResult
+
+from commander.hmi_link import HmiLink
 
 # move_tash_can.usd 의 실제 스폰 pose(chassis_link) — modified_hospital.usd 의
 # docking_station_02 마커(x=6.9807, y=0) 위치로 맞춤. 4_..._nav_pick_test.py 의
@@ -91,7 +94,18 @@ def main():
 
     init_pose = create_pose(nav, *CARTER_START_POSE)
     nav.setInitialPose(init_pose)
-    nav.waitUntilNav2Active()
+
+    # ★ waitUntilNav2Active() 는 carter2/amcl lifecycle('active')을 get_state 로 폴링하는데,
+    #   그 서비스가 안 잡히면 '무한 hang'(Publishing Initial Pose 에서 멈춤) → goal 루프 도달 못 함.
+    #   carter1(spray)처럼 navigate_to_pose 액션서버만 '타임아웃 대기'로 바꿔 hang 을 없앤다.
+    #   서버가 없어도 치명적 처리 안 함 : Isaac 이 goal 을 계속 재발행하므로 이후 goToPose 에서
+    #   자연히 재시도된다(Nav2 가 늦게 떠도 자가복구).
+    WAIT_NAV2_TIMEOUT = 30.0
+    if nav.nav_to_pose_client.wait_for_server(timeout_sec=WAIT_NAV2_TIMEOUT):
+        print("[NS] navigate_to_pose 액션서버 확인 → 진행")
+    else:
+        print(f"[NS][WARN] {WAIT_NAV2_TIMEOUT:.0f}s 내 navigate_to_pose 서버 없음 "
+              "→ 그래도 진행(goal 수신 시 재시도).")
 
     goal_holder = {"pose": None}
 
@@ -101,25 +115,106 @@ def main():
     nav.create_subscription(PoseStamped, goal_topic, on_goal, 10)
     pick_pub = nav.create_publisher(Bool, pick_topic, 10)
 
+    # ── HMI(웹) 연동 ─────────────────────────────────────────────
+    # hmi_enable=True 면 진행 단계를 /robot/waste/process_state 로 발행하고
+    # /robot/command(START/EMERGENCY_STOP) 를 받는다.
+    # wait_for_hmi_start=True 면 START 를 받을 때까지 "대기"(웹에서 시작). 긴급정지는
+    # Nav2 goal 취소 + cmd_vel 0 발행 후 재시작(START)까지 대기.
+    nav.declare_parameter("hmi_enable", True)
+    nav.declare_parameter("hmi_robot_id", "waste")
+    nav.declare_parameter("wait_for_hmi_start", False)
+    hmi = None
+    if bool(nav.get_parameter("hmi_enable").value):
+        cmd_vel_topic = f"/{ns}/cmd_vel" if ns else "/cmd_vel"
+
+        def _hmi_estop():
+            # 콜백 컨텍스트 → spin 금지. goal 취소(비동기) + 바퀴 0속도.
+            gh = getattr(nav, "goal_handle", None)
+            if gh is not None:
+                try:
+                    gh.cancel_goal_async()
+                except Exception:      # noqa: BLE001
+                    pass
+            hmi.stop_wheels()
+
+        hmi = HmiLink(nav, robot_id=str(nav.get_parameter("hmi_robot_id").value),
+                      cmd_vel_topic=cmd_vel_topic, on_estop=_hmi_estop)
+        hmi.publish_state("대기", force=True)
+    wait_start = hmi is not None and bool(nav.get_parameter("wait_for_hmi_start").value)
+
+    # 구간(leg) → 프론트 WASTE_STEPS 라벨 매핑 (PICK→DUMP→RETURN→DOCK)
+    DRIVE_LABELS = ["전방 주행", "수거함 이동", "수거통 원위치", "복귀"]
+    ARRIVE_LABELS = ["폐기물통 파지", "폐기물 투하", "수거통 원위치", "복귀"]
+
+    # Isaac g_run_nav_leg 는 /start_pick 받을 때까지 standoff goal 을 매 스텝 재발행한다.
+    # 미션이 도착·/start_pick 후 다음 구간 goal 대기로 넘어갈 때, 큐에 남은 '직전 standoff'
+    # 잔류 메시지가 다시 들어오면 '제자리(0.2m) 도착'하는 허수 구간이 되어 단계 라벨이
+    # 실제 물리단계보다 앞서간다(파지 중인데 '투하' 표시). → 직전 도착 goal 과 같은 좌표의
+    # 재수신은 무시한다(연속되는 실제 phase goal 은 항상 멀리 떨어져 있어 오판 없음).
+    last_serviced_xy = None      # 직전에 SUCCEEDED 로 도착 완료한 goal (x,y)
+    last_serviced_t = 0.0        # 그 도착 시각(monotonic). 시간창 밖이면 dedup 해제
+    GOAL_DEDUP_TOL = 1.0         # m. 이보다 가까우면 같은 지점으로 간주
+    GOAL_DEDUP_WINDOW = 5.0      # s. 도착 직후 이 시간 안의 같은 좌표 재수신만 무시(잔류).
+                                 #    지나면 새 사이클(Isaac 재시작 등)의 정상 goal 로 받아들임.
+
+    def _gate():
+        """게이트: '첫 START 이전' 또는 '긴급정지 이후'에만 멈추고 '대기'를 표시한다.
+        구간(leg) 사이 정상 전환에서는 상태를 건드리지 않는다 → 파지/이동 모션 중에
+        '대기'가 깜빡이던 문제 해결(폐기물 미션은 leg 마다 이 루프를 다시 돈다)."""
+        if hmi is None:
+            return
+        need_wait = hmi.estop or (wait_start and not hmi.active)
+        if need_wait:
+            hmi.publish_state("대기")
+            print("[HMI] START 대기 중... (웹 '시작' 버튼)")
+            while rclpy.ok() and not hmi.active:
+                rclpy.spin_once(nav, timeout_sec=0.1)
+        elif not wait_start:
+            hmi.active = True     # 자동 시작(하위호환)
+
     # Isaac Sim 스크립트가 여러 구간(소형 쓰레기통 파지 -> big_trash 덤프 -> 이후 추가될
     # 원위치 복귀/도킹 복귀)마다 같은 토픽에 새 목표를 퍼블리시하므로, 한 번 처리하고
     # 끝내지 않고 계속 반복해서 받는다. Isaac Sim 쪽은 /start_pick 받을 때까지 같은
     # 목표를 계속 재발행하므로, 주행 실패/취소돼도 다음 반복에서 같은 목표를 다시 받아
     # 자동으로 재시도된다.
     leg = 0
-    while True:
+    while rclpy.ok():
+        _gate()                            # 웹 시작/재시작 게이트 (긴급정지 후 여기서 대기)
         leg += 1
+        idx = min(leg - 1, len(DRIVE_LABELS) - 1)
         goal_holder["pose"] = None
-        print(f"[WAIT] ({leg}구간) '{NAV_GOAL_TOPIC}' 수신 대기 중...")
-        while goal_holder["pose"] is None:
+        print(f"[WAIT] ({leg}구간) '{goal_topic}' 수신 대기 중...")
+        goal_pose = None
+        while rclpy.ok():
             rclpy.spin_once(nav, timeout_sec=0.5)
+            if hmi is not None and hmi.estop:   # 대기 중 긴급정지 → 다시 게이트로
+                break
+            g = goal_holder["pose"]
+            if g is None:
+                continue
+            # 직전 도착지점의 '잔류 재발행'(도착 직후 짧은 시간)만 무시 → 허수 구간 방지.
+            # 시간창을 지나 들어오는 같은 좌표는 새 사이클의 정상 goal 이므로 받는다.
+            if (last_serviced_xy is not None
+                    and (time.monotonic() - last_serviced_t) < GOAL_DEDUP_WINDOW):
+                dx = g.pose.position.x - last_serviced_xy[0]
+                dy = g.pose.position.y - last_serviced_xy[1]
+                if (dx * dx + dy * dy) ** 0.5 < GOAL_DEDUP_TOL:
+                    goal_holder["pose"] = None
+                    continue
+            goal_pose = g                       # 새 구간 goal 확정
+            break
+        if goal_pose is None:
+            leg -= 1                        # 이 구간 미진행(estop) → 카운트 롤백
+            continue
 
-        goal_pose = goal_holder["pose"]
+        if hmi is not None:
+            hmi.publish_state(DRIVE_LABELS[idx])
         goal_pose.header.stamp = nav.get_clock().now().to_msg()
         print(f"[NAV] ({leg}구간) 목표 수신: x={goal_pose.pose.position.x:.3f}, "
               f"y={goal_pose.pose.position.y:.3f} → 주행 시작")
         nav.goToPose(goal_pose)
 
+        # 긴급정지 콜백이 goal 을 취소하면 isTaskComplete 가 자연히 완료(CANCELED)된다.
         while not nav.isTaskComplete():
             feedback = nav.getFeedback()
             if feedback:
@@ -127,14 +222,20 @@ def main():
 
         result = nav.getResult()
         if result == TaskResult.SUCCEEDED:
-            print(f"[NAV] ({leg}구간) 목적지 도착 완료 → '{START_PICK_TOPIC}' 발행")
+            # 이 좌표의 잔류 재발행을 이후(시간창 내) 무시. 실패/취소 시엔 갱신 안 함(재시도 허용).
+            last_serviced_xy = (goal_pose.pose.position.x, goal_pose.pose.position.y)
+            last_serviced_t = time.monotonic()
+            print(f"[NAV] ({leg}구간) 목적지 도착 완료 → '{pick_topic}' 발행")
+            if hmi is not None:
+                hmi.publish_state(ARRIVE_LABELS[idx])
             for _ in range(10):
                 pick_pub.publish(Bool(data=True))
                 rclpy.spin_once(nav, timeout_sec=0.1)
         elif result == TaskResult.CANCELED:
-            print(f"[NAV] ({leg}구간) 주행 취소됨 → '{START_PICK_TOPIC}' 발행 안 함")
+            print(f"[NAV] ({leg}구간) 주행 취소됨 → '{pick_topic}' 발행 안 함")
+            leg -= 1                        # 취소된 구간 롤백(재시작 시 같은 라벨)
         else:
-            print(f"[NAV] ({leg}구간) 주행 실패 → '{START_PICK_TOPIC}' 발행 안 함")
+            print(f"[NAV] ({leg}구간) 주행 실패 → '{pick_topic}' 발행 안 함")
 
 
 if __name__ == "__main__":

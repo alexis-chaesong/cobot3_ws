@@ -41,9 +41,16 @@ from geometry_msgs.msg import PoseStamped
 from nav2_msgs.action import NavigateToPose
 from std_msgs.msg import Bool
 
+from commander.hmi_link import HmiLink
+
 
 def yaw_to_quat(yaw):
     return math.sin(yaw * 0.5), math.cos(yaw * 0.5)
+
+
+class _Estop(Exception):
+    """긴급정지로 미션 진행을 중단시키는 내부 신호."""
+    pass
 
 
 class SprayWaypointMission(Node):
@@ -106,6 +113,66 @@ class SprayWaypointMission(Node):
         self._done = False
         self.create_subscription(Bool, done_topic, self._on_sweep_done, 10)
 
+        # ── HMI(웹) 연동 ─────────────────────────────────────────────
+        # hmi_enable=True 면 진행 단계를 /robot/disinfect/process_state 로 발행하고
+        # /robot/command(START/EMERGENCY_STOP) 를 받는다.
+        # wait_for_hmi_start=True 면 START 를 받을 때까지 "대기"로 머문다(웹에서 시작).
+        # False(기본)면 기존처럼 실행 즉시 미션 개시(단독 실행 하위호환).
+        self.declare_parameter("hmi_enable", True)
+        self.declare_parameter("hmi_robot_id", "disinfect")
+        self.declare_parameter("wait_for_hmi_start", False)
+        # 첫 START 직후 carter1 localize 가 덜 정착돼 첫 goal 이 실패하는 경우가 잦다.
+        # 한 번 실패로 그 지점을 건너뛰지 않고 N회 재시도(그 사이 AMCL 수렴) → "통합 시작
+        # 눌러도 안 움직임" 완화. 0 이면 재시도 없음(기존 동작).
+        self.declare_parameter("nav_retries", 3)
+
+        self._active_goal_handle = None       # 진행 중 Nav2 goal (긴급정지 취소용)
+        self._hmi = None
+        if bool(self.get_parameter("hmi_enable").value):
+            cmd_vel_topic = f"/{ns}/cmd_vel" if ns else "/cmd_vel"
+            self._hmi = HmiLink(
+                self,
+                robot_id=str(self.get_parameter("hmi_robot_id").value),
+                cmd_vel_topic=cmd_vel_topic,
+                on_estop=self._hmi_estop,
+            )
+            self._hmi.publish_state("대기", force=True)
+
+    # ── HMI 헬퍼 ────────────────────────────────────────────────
+    def _publish_state(self, label):
+        if self._hmi is not None:
+            self._hmi.publish_state(label)
+
+    def _check_estop(self):
+        """긴급정지가 눌렸으면 _Estop 예외로 현재 미션 패스를 중단시킨다."""
+        if self._hmi is not None and self._hmi.estop:
+            raise _Estop()
+
+    def _hmi_estop(self):
+        """긴급정지 콜백(spin 컨텍스트): Nav2 goal 취소 + 스윕 취소 + 바퀴 0속도.
+        여기서는 절대 spin 하지 않는다(재진입 금지)."""
+        if self._active_goal_handle is not None:
+            try:
+                self._active_goal_handle.cancel_goal_async()
+            except Exception:      # noqa: BLE001
+                pass
+        # 진행 중 스윕 취소(스크립트를 STANDBY 로). spin 없이 발행만.
+        for _ in range(5):
+            self._start_pub.publish(Bool(data=False))
+        self._hmi.stop_wheels()
+
+    def _gate(self):
+        """미션 패스 시작 전 게이트. '대기' 표시 후, wait_for_hmi_start 면 START 대기."""
+        self._publish_state("대기")
+        if self._hmi is None:
+            return
+        if not bool(self.get_parameter("wait_for_hmi_start").value):
+            self._hmi.active = True         # 자동 시작(하위호환)
+            return
+        self.get_logger().info("[HMI] START 대기 중... (웹 '시작' 버튼)")
+        while rclpy.ok() and not self._hmi.active:
+            rclpy.spin_once(self, timeout_sec=0.1)
+
     def _on_sweep_done(self, msg):
         if bool(msg.data):
             self._done = True
@@ -142,9 +209,20 @@ class SprayWaypointMission(Node):
         if handle is None or not handle.accepted:
             self.get_logger().error("  goal 거부됨")
             return False
-        result_future = handle.get_result_async()
-        rclpy.spin_until_future_complete(self, result_future)
-        res = result_future.result()
+        # 긴급정지가 goal 전송 도중 들어왔으면 즉시 취소
+        if self._hmi is not None and self._hmi.estop:
+            try:
+                handle.cancel_goal_async()
+            except Exception:      # noqa: BLE001
+                pass
+            return False
+        self._active_goal_handle = handle     # 긴급정지 콜백이 취소할 수 있도록 보관
+        try:
+            result_future = handle.get_result_async()
+            rclpy.spin_until_future_complete(self, result_future)
+            res = result_future.result()
+        finally:
+            self._active_goal_handle = None
         return res is not None and res.status == GoalStatus.STATUS_SUCCEEDED
 
     # ── 스윕 트리거 + 완료 대기 (핸드오프) ────────────────────────
@@ -157,6 +235,8 @@ class SprayWaypointMission(Node):
         end = time.monotonic() + timeout
         while rclpy.ok() and not self._done and time.monotonic() < end:
             rclpy.spin_once(self, timeout_sec=0.1)
+            if self._hmi is not None and self._hmi.estop:   # 긴급정지 → 스윕 대기 중단
+                return False
         if self._done:
             self.get_logger().info("  <<< [SWEEP] /sweep_done 수신 → 완료")
             return True
@@ -174,6 +254,55 @@ class SprayWaypointMission(Node):
         while rclpy.ok() and time.monotonic() < end:
             rclpy.spin_once(self, timeout_sec=0.05)
 
+    # ── 미션 한 패스 (긴급정지 시 _Estop 로 중단됨) ───────────────
+    def _run_pass(self, sweeps, settle):
+        # 소독 단계 → 프론트 DISINFECT_STEPS 라벨 매핑:
+        #   이동="복도 진입", 도착후 안정화="노즐 접촉", 스윕=WP0"소독 분사"/그외"유턴 재분사", 복귀="복귀"
+        for i, (x, y, yaw, enable) in enumerate(sweeps):
+            self._check_estop()
+            self.get_logger().info(
+                f"[{i+1}/{len(sweeps)}] → 이동 ({x:.2f},{y:.2f},{yaw:.2f}) sweep={enable}")
+            self._publish_state("복도 진입")
+            retries = max(1, int(self.get_parameter("nav_retries").value))
+            arrived = False
+            for attempt in range(retries):
+                self._check_estop()
+                if self.navigate_to(x, y, yaw):
+                    arrived = True
+                    break
+                self._check_estop()                  # 취소로 인한 실패면 여기서 중단
+                self.get_logger().warn(
+                    f"  도착 실패 (시도 {attempt + 1}/{retries})"
+                    + (" — 재시도" if attempt + 1 < retries else ""))
+            if not arrived:
+                self.get_logger().warn("  재시도 후에도 도착 실패 → 이 지점 건너뜀")
+                continue
+            self.get_logger().info("  도착.")
+            if enable:
+                self._check_estop()
+                self._publish_state("노즐 접촉")
+                self._settle(settle)                 # 정지 안정화 후 트리거
+                self._check_estop()
+                self._publish_state("소독 분사" if i == 0 else "유턴 재분사")
+                self.run_sweep()                     # /start_sweep → /sweep_done 대기
+                self._check_estop()
+                self._reset_sweep()                  # 확실히 STANDBY 로 되돌림(잔류 트리거 제거)
+
+        # ── 모든 소독 완료 → 초기 도킹 스테이션(홈)으로 복귀 ──
+        if bool(self.get_parameter("return_home").value):
+            hx = float(self.get_parameter("home_x").value)
+            hy = float(self.get_parameter("home_y").value)
+            hyaw = float(self.get_parameter("home_yaw").value)
+            self._reset_sweep()      # 스윕 확실히 STANDBY → 복귀 주행은 Nav2 가(/cmd_vel 충돌 방지, 팔 stow)
+            self._check_estop()
+            self._publish_state("복귀")
+            self.get_logger().info(f"[HOME] 소독 완료 → 초기 도킹 복귀 ({hx:.2f},{hy:.2f},{hyaw:.2f})")
+            if self.navigate_to(hx, hy, hyaw):
+                self.get_logger().info("[HOME] 초기 도킹 도착.")
+            else:
+                self._check_estop()
+                self.get_logger().warn("[HOME] 초기 도킹 복귀 실패(도달 불가/거부).")
+
     # ── 미션 실행 ────────────────────────────────────────────────
     def run(self):
         timeout = float(self.get_parameter("server_timeout").value)
@@ -183,6 +312,8 @@ class SprayWaypointMission(Node):
 
         settle = float(self.get_parameter("settle_time").value)
         loop = bool(self.get_parameter("loop").value)
+        wait_start = self._hmi is not None and \
+            bool(self.get_parameter("wait_for_hmi_start").value)
         sweeps = self.sweeps()
         self.get_logger().info(f"미션 시작: 스윕 시작점 {len(sweeps)}개, loop={loop}")
 
@@ -190,31 +321,24 @@ class SprayWaypointMission(Node):
         self._reset_sweep()
 
         while rclpy.ok():
-            for i, (x, y, yaw, enable) in enumerate(sweeps):
-                self.get_logger().info(
-                    f"[{i+1}/{len(sweeps)}] → 이동 ({x:.2f},{y:.2f},{yaw:.2f}) sweep={enable}")
-                if not self.navigate_to(x, y, yaw):
-                    self.get_logger().warn("  도착 실패 → 이 지점 건너뜀")
+            self._gate()                     # '대기' 표시 + (wait_for_hmi_start면) START 대기
+            try:
+                self._run_pass(sweeps, settle)
+            except _Estop:
+                self.get_logger().warn("[HMI] 긴급정지 → 미션 중단, 대기 복귀")
+                self._reset_sweep()
+                self._publish_state("대기")
+                if wait_start:               # 웹 START 를 다시 기다림
                     continue
-                self.get_logger().info("  도착.")
-                if enable:
-                    self._settle(settle)             # 정지 안정화 후 트리거
-                    self.run_sweep()                 # /start_sweep → /sweep_done 대기
-                    self._reset_sweep()              # 확실히 STANDBY 로 되돌림(잔류 트리거 제거)
-            if not loop:
                 break
-
-        # ── 모든 소독 완료 → 초기 도킹 스테이션(홈)으로 복귀 ──
-        if bool(self.get_parameter("return_home").value):
-            hx = float(self.get_parameter("home_x").value)
-            hy = float(self.get_parameter("home_y").value)
-            hyaw = float(self.get_parameter("home_yaw").value)
-            self._reset_sweep()      # 스윕 확실히 STANDBY → 복귀 주행은 Nav2 가(/cmd_vel 충돌 방지, 팔 stow)
-            self.get_logger().info(f"[HOME] 소독 완료 → 초기 도킹 복귀 ({hx:.2f},{hy:.2f},{hyaw:.2f})")
-            if self.navigate_to(hx, hy, hyaw):
-                self.get_logger().info("[HOME] 초기 도킹 도착.")
-            else:
-                self.get_logger().warn("[HOME] 초기 도킹 복귀 실패(도달 불가/거부).")
+            self._publish_state("대기")
+            if loop:
+                continue
+            # 단일 실행 완료. 웹 제어 모드면 대기로 두고 다음 START 를 기다린다.
+            if wait_start:
+                self._hmi.active = False
+                continue
+            break
 
         self.get_logger().info("[DONE] 미션 종료")
         return True
