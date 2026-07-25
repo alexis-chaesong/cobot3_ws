@@ -13,11 +13,17 @@ export const WASTE_STEPS = [
   "복귀",
 ] as const;
 
+// 16번 dual-SG : carter1 은 먼저 거치대에서 노즐을 "접촉→장착(툴체인지)"한 뒤 복도로 진입해
+// 소독한다. 따라서 물리 순서 = 노즐 접촉 → 노즐 장착 → 복도 진입 → 소독 분사 → 유턴 재분사 → 복귀.
+// (spray_waypoint_mission 의 dock_first=True 발행 라벨과 1:1 매칭. dock_first=False[13번]에서는
+//  복도 진입이 먼저지만, 현재 운용은 16번 기준이라 이 순서를 채택.)
 export const DISINFECT_STEPS = [
   "대기",
-  "복도 진입",
   "노즐 접촉",
+  "노즐 장착",
+  "복도 진입",
   "소독 분사",
+  "복도 진입", // 2차 벽면으로의 이동(같은 라벨). resolveStepIndex 가 '앞으로' 매칭해 뒤로 안 감.
   "유턴 재분사",
   "복귀",
 ] as const;

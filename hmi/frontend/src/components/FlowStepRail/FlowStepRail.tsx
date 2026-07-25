@@ -15,7 +15,7 @@ export function FlowStepRail({ steps, currentStep, variant }: Props) {
         const status =
           i < currentStep ? "done" : i === currentStep ? "current" : "todo";
         return (
-          <li key={label} className={`flow-step flow-step--${status}`}>
+          <li key={`${i}-${label}`} className={`flow-step flow-step--${status}`}>
             <span className="flow-step__dot">
               {status === "done" ? <Check size={12} strokeWidth={3} /> : i + 1}
             </span>

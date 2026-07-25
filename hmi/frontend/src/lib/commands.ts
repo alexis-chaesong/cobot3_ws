@@ -4,7 +4,7 @@
 // 🔧 튜닝: 새 명령 엔드포인트가 생기면 여기에 함수만 추가.
 // ══════════════════════════════════════════════════════════════
 
-import type { RobotId } from "../types";
+import type { CarterId, RobotId } from "../types";
 import { apiClient } from "./apiClient";
 import { MOCK } from "./mock/mockSocket";
 
@@ -32,4 +32,10 @@ export const commands = {
     MOCK
       ? (logMock("estop", robotId ?? "ALL"), Promise.resolve(null))
       : apiClient.post("/api/commands/estop", { robot_id: robotId ?? null }),
+
+  /** 자유 클릭 내비게이션 — carter1/carter2 를 (x,y,yaw) 로 이동. "이 위치로 이동" 확인 후에만 호출. */
+  navigate: (robotId: CarterId, x: number, y: number, yaw = 0) =>
+    MOCK
+      ? (logMock("navigate", { robotId, x, y, yaw }), Promise.resolve(null))
+      : apiClient.post(`/api/commands/navigate/${robotId}`, { x, y, yaw }),
 };

@@ -13,6 +13,7 @@
 import { RobotStatusProvider } from "./context/RobotStatusContext";
 import { TopBar } from "./components/TopBar/TopBar";
 import { RobotLane } from "./components/RobotLane/RobotLane";
+import { MapPanel } from "./components/MapPanel/MapPanel";
 import { VisionFeedPanel } from "./components/VisionFeedPanel/VisionFeedPanel";
 import { CctvFeedPanel } from "./components/CctvFeedPanel/CctvFeedPanel";
 import { QueuePanel } from "./components/QueuePanel/QueuePanel";
@@ -30,6 +31,9 @@ export default function App() {
           <RobotLane robotId="waste" />
           <RobotLane robotId="disinfect" />
         </div>
+
+        {/* 자유 클릭 내비게이션 지도 — 별도 행(넓어서 2열 그리드엔 안 어울림) */}
+        <MapPanel />
 
         {/* 모니터링 2열: Vision | CCTV
             streamUrl 미지정 → placeholder 표시. 실제 URL 주입 시 바로 표시. */}
