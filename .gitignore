@@ -8,7 +8,13 @@ __pycache__/
 *.pyc
 
 # 서브모듈 대신 로컬 관리하는 외부 레포 (버전 추적 안 함)
-src/doosan-robot2/
+# 단, m0609_with_nozzle(소독 노즐 커스텀 USD)는 이 프로젝트 전용 산출물이라 예외로 추적한다
+# (팀원마다 못 구해서 13_/15_/16_ 툴체인저 로직이 막히던 문제 해결용).
+src/doosan-robot2/*
+!src/doosan-robot2/urdf/
+src/doosan-robot2/urdf/*
+!src/doosan-robot2/urdf/m0609_with_nozzle/
+!src/doosan-robot2/urdf/m0609_with_nozzle.urdf
 src/onrobot_rg2/
 
 # 에디터
