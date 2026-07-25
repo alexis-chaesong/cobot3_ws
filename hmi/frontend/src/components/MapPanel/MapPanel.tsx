@@ -1,13 +1,15 @@
 // 자유 클릭 내비게이션 지도. Nav2 occupancy grid 위에 carter1(소독/blue)·carter2(폐기물/red)
-// 실시간 위치를 아이콘으로 표시하고, 클릭 → 미리보기 마커 → "이 위치로 이동" 확인 후에만
-// commands.navigate 를 호출한다(즉시 이동 금지 — 안전 UX).
+// 실시간 위치를 아이콘으로 표시한다. 지도를 여러 번 클릭해 "웨이포인트 경로"(드래프트)를
+// 만들고, "경로 시작"을 눌러야만 routeQueue 에 등록되어 로봇이 순서대로 이동한다
+// (즉시 이동 금지 — 안전 UX). 진행 중인 경로는 실선/구간 마커로, 완료 구간은 회색으로 표시.
 // 🔧 튜닝: 로봇 색은 CARTER_META.variant → tokens.css --waste-accent/--disinfect-accent.
 import { useEffect, useRef, useState, type MouseEvent } from "react";
-import { MapPin, Navigation2 } from "lucide-react";
+import { Navigation2, Route, X } from "lucide-react";
 import { CARTER_IDS, CARTER_META } from "../../constants/carters";
 import { useMapInfo } from "../../hooks/useMapInfo";
 import { useRobotPose } from "../../hooks/useRobotPose";
-import { commands } from "../../lib/commands";
+import { useRouteQueue } from "../../hooks/useRouteQueue";
+import { enqueueRoute, cancelRoute } from "../../lib/routeQueue";
 import type { CarterId, MapInfo } from "../../types";
 import "./MapPanel.css";
 
@@ -15,6 +17,8 @@ const ACCENT: Record<"waste" | "disinfect", string> = {
   waste: "#b3433f",
   disinfect: "#2f6690",
 };
+const DRAFT_COLOR = "#1c8577";
+const CANVAS_FONT = "10px 'IBM Plex Mono', monospace";
 
 function worldToPixel(x: number, y: number, mapInfo: MapInfo) {
   const px = (x - mapInfo.originX) / mapInfo.resolution;
@@ -29,9 +33,7 @@ function pixelToWorld(px: number, py: number, mapInfo: MapInfo) {
   return { x, y };
 }
 
-interface PreviewMarker {
-  px: number;
-  py: number;
+interface DraftPoint {
   x: number;
   y: number;
 }
@@ -39,12 +41,12 @@ interface PreviewMarker {
 export function MapPanel() {
   const { mapInfo, imageUrl } = useMapInfo();
   const poses = useRobotPose();
+  const routes = useRouteQueue();
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const imgRef = useRef<HTMLImageElement | null>(null);
   const [selected, setSelected] = useState<CarterId>("carter1");
-  const [preview, setPreview] = useState<PreviewMarker | null>(null);
+  const [draftPoints, setDraftPoints] = useState<DraftPoint[]>([]);
   const [imgLoaded, setImgLoaded] = useState(false);
-  const [sending, setSending] = useState(false);
 
   // 지도 이미지 로드(목 모드는 imageUrl=null → placeholder 배경 유지)
   useEffect(() => {
@@ -65,7 +67,7 @@ export function MapPanel() {
     };
   }, [imageUrl]);
 
-  // 캔버스 렌더 — 맵 배경 + 로봇 아이콘 + 미리보기 마커.
+  // 캔버스 렌더 — 맵 배경 + 경로(양쪽 로봇) + 로봇 아이콘 + 드래프트(선택 로봇, 미확정).
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas || !mapInfo) return;
@@ -82,6 +84,51 @@ export function MapPanel() {
       ctx.fillRect(0, 0, canvas.width, canvas.height);
     }
 
+    // 1) 등록된 웨이포인트 경로(양쪽 로봇 — 진행 중이면 항상 표시)
+    for (const id of CARTER_IDS) {
+      const wps = routes[id];
+      if (wps.length === 0) continue;
+      const color = ACCENT[CARTER_META[id].variant];
+      const pts = wps.map((w) => worldToPixel(w.x, w.y, mapInfo));
+
+      ctx.beginPath();
+      pts.forEach((p, i) => (i === 0 ? ctx.moveTo(p.px, p.py) : ctx.lineTo(p.px, p.py)));
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 2;
+      ctx.setLineDash([6, 4]);
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      wps.forEach((w, i) => {
+        const { px, py } = pts[i];
+        const radius = w.status === "active" ? 9 : 7;
+        ctx.beginPath();
+        ctx.arc(px, py, radius, 0, Math.PI * 2);
+        if (w.status === "done") {
+          ctx.fillStyle = "#9aa5ab";
+          ctx.fill();
+        } else if (w.status === "active") {
+          ctx.fillStyle = color;
+          ctx.fill();
+          ctx.strokeStyle = "#fff";
+          ctx.lineWidth = 2;
+          ctx.stroke();
+        } else {
+          ctx.fillStyle = "#fff";
+          ctx.fill();
+          ctx.strokeStyle = color;
+          ctx.lineWidth = 2;
+          ctx.stroke();
+        }
+        ctx.fillStyle = w.status === "queued" ? color : "#fff";
+        ctx.font = CANVAS_FONT;
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText(String(i + 1), px, py);
+      });
+    }
+
+    // 2) 실시간 로봇 위치 아이콘
     for (const id of CARTER_IDS) {
       const pose = poses[id];
       if (!pose) continue;
@@ -97,7 +144,6 @@ export function MapPanel() {
       ctx.strokeStyle = "#fff";
       ctx.lineWidth = 2;
       ctx.stroke();
-      // 진행방향 화살표
       ctx.beginPath();
       ctx.moveTo(0, 0);
       ctx.lineTo(16, 0);
@@ -107,24 +153,33 @@ export function MapPanel() {
       ctx.restore();
     }
 
-    if (preview) {
+    // 3) 드래프트 경로(선택된 로봇, 아직 미확정 — 클릭할 때마다 점 추가)
+    if (draftPoints.length > 0) {
+      const pts = draftPoints.map((p) => worldToPixel(p.x, p.y, mapInfo));
       ctx.beginPath();
-      ctx.arc(preview.px, preview.py, 10, 0, Math.PI * 2);
-      ctx.fillStyle = "rgba(28, 133, 119, 0.25)";
-      ctx.fill();
-      ctx.strokeStyle = "#1c8577";
+      pts.forEach((p, i) => (i === 0 ? ctx.moveTo(p.px, p.py) : ctx.lineTo(p.px, p.py)));
+      ctx.strokeStyle = DRAFT_COLOR;
       ctx.lineWidth = 2;
+      ctx.setLineDash([4, 3]);
       ctx.stroke();
-      ctx.beginPath();
-      ctx.moveTo(preview.px, preview.py - 15);
-      ctx.lineTo(preview.px, preview.py + 15);
-      ctx.moveTo(preview.px - 15, preview.py);
-      ctx.lineTo(preview.px + 15, preview.py);
-      ctx.strokeStyle = "#1c8577";
-      ctx.lineWidth = 1.5;
-      ctx.stroke();
+      ctx.setLineDash([]);
+
+      pts.forEach((p, i) => {
+        ctx.beginPath();
+        ctx.arc(p.px, p.py, 9, 0, Math.PI * 2);
+        ctx.fillStyle = DRAFT_COLOR;
+        ctx.fill();
+        ctx.strokeStyle = "#fff";
+        ctx.lineWidth = 2;
+        ctx.stroke();
+        ctx.fillStyle = "#fff";
+        ctx.font = CANVAS_FONT;
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText(String(i + 1), p.px, p.py);
+      });
     }
-  }, [mapInfo, poses, preview, imgLoaded]);
+  }, [mapInfo, poses, routes, draftPoints, imgLoaded]);
 
   const handleCanvasClick = (e: MouseEvent<HTMLCanvasElement>) => {
     const canvas = canvasRef.current;
@@ -136,19 +191,22 @@ export function MapPanel() {
     const px = (e.clientX - rect.left) * scaleX;
     const py = (e.clientY - rect.top) * scaleY;
     const { x, y } = pixelToWorld(px, py, mapInfo);
-    setPreview({ px, py, x, y });
+    setDraftPoints((prev) => [...prev, { x, y }]);
   };
 
-  const confirmMove = async () => {
-    if (!preview || sending) return;
-    setSending(true);
-    try {
-      await commands.navigate(selected, preview.x, preview.y, 0);
-    } finally {
-      setSending(false);
-      setPreview(null);
-    }
+  const startRoute = () => {
+    if (draftPoints.length === 0) return;
+    enqueueRoute(
+      selected,
+      draftPoints.map((p) => ({ x: p.x, y: p.y, yaw: 0 })),
+    );
+    setDraftPoints([]);
   };
+
+  const selectedRoute = routes[selected];
+  const selectedRouteActive = selectedRoute.length > 0;
+  const doneCount = selectedRoute.filter((w) => w.status === "done").length;
+  const routeFinished = selectedRouteActive && doneCount === selectedRoute.length;
 
   return (
     <div className="panel map-panel">
@@ -183,44 +241,63 @@ export function MapPanel() {
             <span>지도 정보 로딩 중…</span>
           </div>
         ) : (
-          <>
-            <canvas
-              ref={canvasRef}
-              className="map-panel__canvas"
-              onClick={handleCanvasClick}
-            />
-            {preview && (
-              <div
-                className="map-panel__confirm"
-                style={{
-                  left: `${(preview.px / mapInfo.width) * 100}%`,
-                  top: `${(preview.py / mapInfo.height) * 100}%`,
-                }}
-              >
-                <div className="map-panel__confirm-coord">
-                  <MapPin size={12} /> ({preview.x.toFixed(2)}, {preview.y.toFixed(2)})
-                </div>
-                <div className="map-panel__confirm-actions">
-                  <button
-                    type="button"
-                    className="map-panel__confirm-go"
-                    disabled={sending}
-                    onClick={confirmMove}
-                  >
-                    이 위치로 이동
-                  </button>
-                  <button
-                    type="button"
-                    className="map-panel__confirm-cancel"
-                    disabled={sending}
-                    onClick={() => setPreview(null)}
-                  >
-                    취소
-                  </button>
-                </div>
-              </div>
-            )}
-          </>
+          <canvas
+            ref={canvasRef}
+            className="map-panel__canvas"
+            onClick={handleCanvasClick}
+          />
+        )}
+      </div>
+
+      <div className="map-panel__toolbar">
+        {selectedRouteActive && (
+          <div className="map-panel__route-status">
+            <span>
+              {CARTER_META[selected].label}{" "}
+              {routeFinished
+                ? `경로 완료 (${doneCount}/${selectedRoute.length})`
+                : `경로 진행 중 (${doneCount}/${selectedRoute.length})`}
+            </span>
+            <button
+              type="button"
+              className="map-panel__route-cancel"
+              onClick={() => cancelRoute(selected)}
+            >
+              <X size={12} /> {routeFinished ? "지우기" : "경로 취소"}
+            </button>
+          </div>
+        )}
+
+        {draftPoints.length > 0 ? (
+          <div className="map-panel__draft-bar">
+            <span className="map-panel__draft-count">
+              {draftPoints.length}개 지점 추가됨
+            </span>
+            <button
+              type="button"
+              className="map-panel__draft-undo"
+              onClick={() => setDraftPoints((prev) => prev.slice(0, -1))}
+            >
+              마지막 취소
+            </button>
+            <button
+              type="button"
+              className="map-panel__draft-clear"
+              onClick={() => setDraftPoints([])}
+            >
+              초기화
+            </button>
+            <button type="button" className="map-panel__draft-start" onClick={startRoute}>
+              <Route size={13} /> 경로 시작 ({draftPoints.length})
+            </button>
+          </div>
+        ) : (
+          !selectedRouteActive &&
+          mapInfo && (
+            <p className="map-panel__hint">
+              지도를 클릭해 {CARTER_META[selected].label}의 이동 경로를 만드세요(여러 지점 가능)
+            </p>
+          )
         )}
       </div>
     </div>

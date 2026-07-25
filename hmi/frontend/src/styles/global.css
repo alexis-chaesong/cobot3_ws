@@ -47,11 +47,21 @@ p {
   margin: 0 auto;
 }
 
-/* 2열 그리드 (로봇 레인 / 모니터링 / 운영) 공통 */
+/* 2열 그리드 (로봇 레인 / 운영) 공통 */
 .grid-2col {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: var(--gap-lane);
+}
+
+/* 모니터링 행 — 패널 1개를 중앙에 정렬(2열 그리드로 늘리지 않음) */
+.monitoring-row {
+  display: flex;
+  justify-content: center;
+}
+.monitoring-row > * {
+  width: 100%;
+  max-width: 720px;
 }
 
 /* 재사용 패널 카드 */

@@ -1,7 +1,10 @@
-// 로그/이력 패널. useLogs로 조회(목 or REST). info/error 색 구분.
-import { ScrollText } from "lucide-react";
+// 로그/이력 패널. 로봇 이벤트(useLogs, REST/목)와 관리자 UI 액션(useUiActionLog)을
+// 합쳐 시간순(최신 우선)으로 보여준다. info/error 색 구분 + UI 액션은 아이콘으로 구분.
+import { ScrollText, MousePointerClick } from "lucide-react";
 import { useLogs } from "../../hooks/useLogs";
+import { useUiActionLog } from "../../hooks/useUiActionLog";
 import { ROBOT_META } from "../../constants/robots";
+import type { LogEntry } from "../../types";
 import "./LogPanel.css";
 
 function fmtTime(iso: string): string {
@@ -12,7 +15,12 @@ function fmtTime(iso: string): string {
 }
 
 export function LogPanel() {
-  const logs = useLogs();
+  const robotLogs = useLogs();
+  const uiLogs = useUiActionLog();
+
+  const merged: LogEntry[] = [...robotLogs, ...uiLogs].sort(
+    (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime(),
+  );
 
   return (
     <div className="panel log-panel">
@@ -23,14 +31,28 @@ export function LogPanel() {
       </div>
 
       <ul className="log-panel__list">
-        {logs.length === 0 && <li className="log-panel__empty">로그 없음</li>}
-        {logs.map((log) => (
-          <li key={log.id} className={`log-panel__row log-panel__row--${log.level}`}>
-            <span className="log-panel__time">{fmtTime(log.timestamp)}</span>
-            <span className="log-panel__robot">{ROBOT_META[log.robotId].label}</span>
-            <span className="log-panel__msg">{log.message}</span>
-          </li>
-        ))}
+        {merged.length === 0 && <li className="log-panel__empty">로그 없음</li>}
+        {merged.map((log) => {
+          const isUi = log.kind === "ui";
+          const label = isUi ? log.targetLabel : ROBOT_META[log.robotId].label;
+          return (
+            <li
+              key={log.id}
+              className={`log-panel__row log-panel__row--${log.level}${
+                isUi ? " log-panel__row--ui" : ""
+              }`}
+            >
+              <span className="log-panel__time">{fmtTime(log.timestamp)}</span>
+              <span className="log-panel__robot">{label}</span>
+              <span className="log-panel__msg">
+                {isUi && (
+                  <MousePointerClick size={11} className="log-panel__ui-icon" />
+                )}
+                {log.message}
+              </span>
+            </li>
+          );
+        })}
       </ul>
     </div>
   );

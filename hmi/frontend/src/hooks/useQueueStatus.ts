@@ -1,15 +1,28 @@
 // ══════════════════════════════════════════════════════════════
-// useQueueStatus — 작업 큐 상태. 목 모드면 fixtures.
-// 실제 백엔드에 큐 조회 엔드포인트가 생기면 useLogs와 동일 패턴으로 확장.
+// useQueueStatus — 작업 큐 상태. routeQueue.ts(관리자가 지도에서 만든 웨이포인트 경로)를
+// carter1/carter2 별 QueueItem[] 로 변환해서 보여준다(mock/실모드 공통 — 둘 다 같은
+// routeQueue 모듈을 쓰므로 별도 분기 불필요).
 // ══════════════════════════════════════════════════════════════
 
-import { useState } from "react";
-import { MOCK } from "../lib/mock/mockSocket";
-import { MOCK_QUEUE } from "../lib/mock/fixtures";
+import { CARTER_IDS, CARTER_META } from "../constants/carters";
+import { useRouteQueue } from "./useRouteQueue";
 import type { QueueItem } from "../types";
 
 export function useQueueStatus(): QueueItem[] {
-  // 목 모드: 정적 큐. 실제 모드: (엔드포인트 미정) 빈 배열로 시작.
-  const [queue] = useState<QueueItem[]>(MOCK ? MOCK_QUEUE : []);
-  return queue;
+  const routes = useRouteQueue();
+  const items: QueueItem[] = [];
+
+  for (const carterId of CARTER_IDS) {
+    const meta = CARTER_META[carterId];
+    routes[carterId].forEach((wp, i) => {
+      items.push({
+        taskId: wp.id,
+        variant: meta.variant,
+        label: `${meta.label} · 지점 ${i + 1} (${wp.x.toFixed(1)}, ${wp.y.toFixed(1)})`,
+        status: wp.status,
+      });
+    });
+  }
+
+  return items;
 }
