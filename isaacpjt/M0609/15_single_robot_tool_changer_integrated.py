@@ -43,10 +43,16 @@ import os
 from isaacsim import SimulationApp
 
 # 기본 GUI. 헤드리스 스모크 테스트 시 ISAAC_HEADLESS=1.
-simulation_app = SimulationApp({"headless": os.environ.get("ISAAC_HEADLESS", "0") == "1"})
+# 원격 노트북에서 WebRTC로 볼 때는 LIVESTREAM=1 (NVIDIA Isaac Sim WebRTC Streaming Client 필요).
+_LIVESTREAM = os.environ.get("LIVESTREAM", "0") == "1"
+simulation_app = SimulationApp({
+    "headless": os.environ.get("ISAAC_HEADLESS", "0") == "1" or _LIVESTREAM
+})
 
 from isaacsim.core.utils.extensions import enable_extension
 enable_extension("isaacsim.ros2.bridge")
+if _LIVESTREAM:
+    enable_extension("omni.kit.livestream.webrtc")
 simulation_app.update()
 
 import sys
@@ -71,7 +77,7 @@ from geometry_msgs.msg import Twist, PoseStamped
 from rosgraph_msgs.msg import Clock
 
 _THIS_DIR = Path(__file__).resolve().parent                 # isaacpjt/M0609
-_WS_ROOT = Path("/home/rokey/cobot3_ws")
+_WS_ROOT = _THIS_DIR.parent.parent                           # 레포 루트(clone 위치 무관)
 
 # carter2 RMPflow 컨트롤러(그리퍼 팔) : integration/rmpflow 에 common/description yaml 있음.
 _C2_RMPFLOW_DIR = str(_WS_ROOT / "src" / "integration" / "integration" / "rmpflow")
@@ -90,8 +96,13 @@ from tool_changer import ToolChangerController  # noqa: E402
 # ════════════════════════════════════════════════════════════════════════════
 #  A. 공통 경로/상수
 # ════════════════════════════════════════════════════════════════════════════
-HOSPITAL_USD = ("/home/rokey/IsaacSim-ros_workspaces/humble_ws/src/navigation/"
-                "carter_navigation/maps/map/modified_hospital.usd")
+# carter_navigation 은 이 레포 밖의 별도 워크스페이스에 있어 상대경로로 못 잡는다 —
+# CARTER_NAV_WS env var 로 override 가능(기본값 = 팀 관례 위치).
+_CARTER_NAV_WS = Path(os.environ.get(
+    "CARTER_NAV_WS", str(Path.home() / "IsaacSim-ros_workspaces" / "humble_ws")
+))
+HOSPITAL_USD = str(_CARTER_NAV_WS / "src" / "navigation" / "carter_navigation"
+                    / "maps" / "map" / "modified_hospital.usd")
 NOZZLE_USD = str(_WS_ROOT / "src" / "integration" / "integration" / "m0609_with_nozzle.usd")
 MOVE_TRASH_USD = str(_WS_ROOT / "src" / "assets" / "scenes" / "move_tash_can.usd")
 
@@ -188,20 +199,22 @@ FINAL_MOVE_SETTLE_STEPS = 30
 FINAL_NUDGE_DISTANCE = 0.00
 PRE_ROTATE_NUDGE_DISTANCE = 0.25
 
-# [사용자 제안] 도킹(거치대) 정밀 복귀 — g_run_nav_leg 최종접근(회전→직진 오픈루프→회전)은
-# 직진 거리를 "진입 시점 1회"만 재고 이후엔 다시 안 재서, 초기 정렬 오차가 그대로 남을 수 있다.
-# 도킹 지점 근처(FINAL_APPROACH_DISTANCE 반경)에 도달한 뒤엔 매 스텝 월드좌표계 기준 잔여
-# 위치/자세 오차를 다시 측정해 cmd_vel 로 폐루프 서보 — 트래시 DOCK/분사 거치대 복귀 공통 사용.
-DOCK_PRECISE_POS_TOL = 0.02
-DOCK_PRECISE_YAW_TOL = np.radians(2.0)
-DOCK_PRECISE_KP_LIN = 0.8
-DOCK_PRECISE_MAX_LIN = 0.15
-DOCK_PRECISE_KP_YAW = 2.0
-DOCK_PRECISE_KD_YAW = 0.4
-DOCK_PRECISE_MAX_ANG = 0.6
-DOCK_PRECISE_MAX_ANG_STEP = 0.03
-DOCK_PRECISE_MAX_STEPS = 900
-DOCK_PRECISE_SETTLE_COUNT = 5
+# [사용자 제안 — "정밀 도킹 및 주행 궤도 고도화 계획서"에서 마커/비전 부분은 빼고 제어 로직만 반영]
+# g_run_nav_leg 최종접근(회전→직진 오픈루프→회전)은 직진 거리를 "진입 시점 1회"만 재고 이후엔
+# 다시 안 재서, 초기 정렬 오차가 그대로 남을 수 있다. 처음엔 이걸 "매 스텝 계속 재측정하는 폐루프
+# 서보"로 고쳤는데, 목표 수 cm 근방에서 "목표 방향(bearing)"이 위치 잡음(ground truth 라 센서
+# 노이즈는 없지만 거리가 0에 가까워지면 atan2 자체가 특이점에 가까워짐)에 극도로 민감해져 chattering이
+# 나고 자세(yaw) 보정이 아예 안 걸리는 문제가 실측으로 확인됐다(라이브 SPRAY_RETURN, yaw 71.4도 방치).
+# → 계획서의 "Nudge(사전 정렬) + One-Shot(정지 후 1회 측정 → 그 값으로만 이동, 이동 중엔 재측정 안 함)"
+# 패턴으로 교체: 이동 중엔 절대 목표까지의 벡터를 다시 안 재고, 완전히 멈춰서 측정 → 계산된 만큼만
+# 이동 → 다시 멈춰서 재측정, 을 몇 차례 반복(discrete/저빈도 폐루프)해 근본적으로 chattering을 없앤다.
+DOCK_NUDGE_DISTANCE = 0.10     # 캐스터 정렬용 사전 전후진 거리(계획서 Phase 2)
+DOCK_NUDGE_SPEED = 0.10
+DOCK_ONESHOT_MAX_ITERS = 3     # 정지-측정-이동 반복 최대 횟수
+DOCK_ONESHOT_POS_TOL = 0.02
+DOCK_ONESHOT_DRIVE_SPEED = 0.08   # 최종 보정 구간은 느리게(오버슈트 방지). 최종 자세 허용치는
+                                  # g_rotate_in_place 가 쓰는 FINAL_ROTATE_TOLERANCE_RAD 재사용.
+DOCK_ONESHOT_SETTLE_STEPS = 20    # 측정 전 완전 정지 대기(모션 잔진동 없이 깨끗한 1회 측정 확보)
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -972,75 +985,53 @@ def g_run_nav_leg(ctx, standoff_xy, standoff_yaw, chassis_goal_xy, chassis_goal_
         yield from g_drive_straight_open_loop(ctx, FINAL_NUDGE_DISTANCE, C2_ARTICULATION_ROOT)
 
 
+def g_caster_nudge(ctx, chassis_path=C2_ARTICULATION_ROOT, distance=DOCK_NUDGE_DISTANCE):
+    """[사용자 제안 — Nudge] 직전 회전/주행으로 캐스터 바퀴가 아무 방향으로나 트레일링된 채 정밀
+    도킹을 시작하면 첫 스텝에 대각선으로 튀는(caster drift) 원인이 된다. 짧게 전진→후진(같은
+    거리)해 캐스터를 현재 주행축 방향으로 강제 정렬한 뒤 정밀 접근을 시작한다."""
+    yield from g_drive_straight_open_loop(ctx, distance, chassis_path, speed=DOCK_NUDGE_SPEED)
+    yield from g_drive_straight_open_loop(ctx, distance, chassis_path, speed=DOCK_NUDGE_SPEED, reverse=True)
+
+
 def g_precise_dock_approach(ctx, goal_xy, goal_yaw, chassis_path=C2_ARTICULATION_ROOT, label="DOCK"):
-    """[사용자 제안] 도킹 스테이션 근처에서의 정밀 폐루프 서보. g_run_nav_leg 의 최종접근은
-    진입 시점에 잰 거리만큼 오픈루프로 직진하기 때문에, 초기 회전이 살짝 어긋나 있거나 바퀴
-    슬립이 있으면 잔여 위치오차가 그대로 남는다. 이 함수는 매 스텝 실제 월드좌표(get_prim_world_position
-    /get_chassis_yaw)로 goal 까지 남은 벡터를 다시 재서(dead-reckoning 아님) 선속도/각속도를
-    동시에 cmd_vel 로 내보내는 고전적 go-to-goal 제어 — 위치오차가 허용치 안으로 들어오면 최종
-    자세(goal_yaw)만 맞추는 단계로 전환한다. g_run_nav_leg 로 이미 근접한 뒤 마무리 보정으로 이어붙여
-    쓴다(트래시 DOCK, 분사 거치대 왕복 공통).
-    ★버그 발견·수정★ : translate/rotate 전환을 매 스텝 dist 하나로만 판단했더니, 목표 수 cm 근방에서
-    "goal 방향(bearing)"이 위치 잡음에 극도로 민감해져(거의 특이점) dist 가 허용치 경계를
-    들락날락할 때마다 위치보정(bearing 추종)↔자세보정(goal_yaw 추종) 모드가 매 스텝 뒤바뀌며
-    실측(라이브 SPRAY_RETURN)에서 위치는 1.5cm 로 잘 수렴했는데 yaw 는 71.4도 로 전혀 안 맞고
-    900스텝을 그대로 소진하는 현상이 재현됐다 → phase 를 "translate"→"rotate" **단방향** 전환으로
-    바꿔, 한번 자세보정 모드로 넘어가면 (드문 큰 밀림 예외 외엔) 다시 위치보정으로 안 돌아가게 했다."""
-    prev_yaw = get_chassis_yaw(chassis_path)
-    w_applied = 0.0
-    phase = "translate"
-    pos_settle = 0
-    yaw_settle = 0
-    pos_reentry_tol = DOCK_PRECISE_POS_TOL * 3.0   # rotate 단계에서 약간 밀려도 다시 translate로 안 돌아가도록 여유
-    for _ in range(DOCK_PRECISE_MAX_STEPS):
-        yield
+    """[사용자 제안 — Nudge + One-Shot] g_run_nav_leg 의 최종접근(회전→직진 오픈루프→회전)은
+    직진 거리를 진입 시점에 1회만 재고 이후 다시 안 재서 잔여 오차가 남을 수 있다.
+    ★첫 버전(폐기)★: 매 스텝 계속 재측정하는 연속 폐루프로 짜봤더니, 목표 수 cm 근방에서 "목표
+    방향(bearing)"이 (ground truth라 센서 노이즈는 없어도) 위치가 0에 가까워질수록 atan2 자체가
+    특이점에 가까워져 극도로 민감해지고, 위치보정↔자세보정 모드가 매 스텝 뒤바뀌는 chattering이
+    실측(라이브 SPRAY_RETURN)으로 확인됨(위치는 1.5cm로 수렴했는데 yaw는 71.4도 방치, 900스텝 소진).
+    ★현재 버전★: 이동 중엔 절대 목표 벡터를 재측정하지 않는 "정지→1회 측정→계산된 만큼만 이동"을
+    최대 DOCK_ONESHOT_MAX_ITERS 회 반복(저빈도 discrete 폐루프라 chattering 자체가 구조적으로 불가능)
+    하고, 최종 자세는 위치와 무관하게 그 자리에서 회전만 하는 g_rotate_in_place(각도만 보므로 안정적)
+    로 정렬한다. 시작 전엔 g_caster_nudge 로 캐스터부터 정렬(계획서 Phase 2)."""
+    yield from g_caster_nudge(ctx, chassis_path)
+
+    for it in range(DOCK_ONESHOT_MAX_ITERS):
+        ctx.cmd_pub.publish(Twist())
+        for _ in range(DOCK_ONESHOT_SETTLE_STEPS):     # 완전 정지 후 깨끗한 1회 측정 확보
+            yield
         pos_xy = get_prim_world_position(chassis_path)[:2]
         yaw = get_chassis_yaw(chassis_path)
-        yaw_rate = wrap_pi(yaw - prev_yaw) / PHYSICS_DT
-        prev_yaw = yaw
-
         to_goal = goal_xy - pos_xy
         dist = float(np.linalg.norm(to_goal))
+        if dist < DOCK_ONESHOT_POS_TOL:
+            break
+        bearing = float(np.arctan2(to_goal[1], to_goal[0]))
+        print(f"[DOCK:{label}] One-Shot 스캔 #{it + 1}: dist={dist:.3f}m bearing={np.degrees(bearing):.1f}도"
+              f" (이동 중 재측정 없음 — 이 값으로만 이동)")
+        yield from g_rotate_in_place(ctx, bearing, FINAL_ROTATE_KP, FINAL_ROTATE_KD, FINAL_ROTATE_W_MAX,
+                                     FINAL_ROTATE_MAX_W_STEP, FINAL_ROTATE_TOLERANCE_RAD, chassis_path)
+        yield from g_drive_straight_open_loop(ctx, dist, chassis_path, speed=DOCK_ONESHOT_DRIVE_SPEED)
+    else:
+        print(f"[DOCK:{label}][WARN] One-Shot {DOCK_ONESHOT_MAX_ITERS}회 반복 후에도 "
+              f"위치 허용치({DOCK_ONESHOT_POS_TOL}m) 미달 — 마지막 측정값으로 자세 정렬만 진행")
 
-        if phase == "translate":
-            if dist < DOCK_PRECISE_POS_TOL:
-                pos_settle += 1
-                if pos_settle >= DOCK_PRECISE_SETTLE_COUNT:
-                    phase = "rotate"
-                    yaw_settle = 0
-            else:
-                pos_settle = 0
+    yield from g_rotate_in_place(ctx, goal_yaw, FINAL_ROTATE_KP, FINAL_ROTATE_KD, FINAL_ROTATE_W_MAX,
+                                 FINAL_ROTATE_MAX_W_STEP, FINAL_ROTATE_TOLERANCE_RAD, chassis_path)
 
-        if phase == "translate":
-            bearing_err = wrap_pi(float(np.arctan2(to_goal[1], to_goal[0])) - yaw)
-            lin = DOCK_PRECISE_KP_LIN * min(dist, DOCK_PRECISE_MAX_LIN / DOCK_PRECISE_KP_LIN) * max(0.0, float(np.cos(bearing_err)))
-            yaw_target_err = bearing_err
-        else:
-            lin = 0.0
-            yaw_target_err = wrap_pi(goal_yaw - yaw)
-            if abs(yaw_target_err) < DOCK_PRECISE_YAW_TOL:
-                yaw_settle += 1
-                if yaw_settle >= DOCK_PRECISE_SETTLE_COUNT:
-                    if dist < pos_reentry_tol:
-                        break
-                    phase = "translate"
-                    pos_settle = 0
-                    yaw_settle = 0
-            else:
-                yaw_settle = 0
-
-        w_t = float(np.clip(DOCK_PRECISE_KP_YAW * yaw_target_err - DOCK_PRECISE_KD_YAW * yaw_rate,
-                            -DOCK_PRECISE_MAX_ANG, DOCK_PRECISE_MAX_ANG))
-        w_applied += float(np.clip(w_t - w_applied, -DOCK_PRECISE_MAX_ANG_STEP, DOCK_PRECISE_MAX_ANG_STEP))
-        tw = Twist(); tw.linear.x = float(lin); tw.angular.z = w_applied
-        ctx.cmd_pub.publish(tw)
-
-    ctx.cmd_pub.publish(Twist())
-    for _ in range(FINAL_MOVE_SETTLE_STEPS):
-        yield
     final_pos = get_prim_world_position(chassis_path)[:2]
     final_yaw = get_chassis_yaw(chassis_path)
-    print(f"[DOCK:{label}] 정밀 도킹 서보 완료 pos={np.round(final_pos, 3).tolist()}"
+    print(f"[DOCK:{label}] 정밀 도킹(Nudge+One-Shot) 완료 pos={np.round(final_pos, 3).tolist()}"
           f"(목표{goal_xy.tolist()}) yaw={np.degrees(final_yaw):.1f}도(목표{np.degrees(goal_yaw):.1f}도)")
 
 

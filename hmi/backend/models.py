@@ -14,3 +14,18 @@ class EmergencyStopRequest(BaseModel):
 class CommandResult(BaseModel):
     result: str
     robot_id: Optional[str] = None
+
+
+class NavigateRequest(BaseModel):
+    # 자유 클릭 이동 목표(map 프레임 world 좌표). yaw 는 라디안, 미지정 시 0.
+    x: float
+    y: float
+    yaw: float = 0.0
+
+
+class MapInfo(BaseModel):
+    resolution: float
+    origin_x: float
+    origin_y: float
+    width: int
+    height: int

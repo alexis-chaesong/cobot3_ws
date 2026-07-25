@@ -19,10 +19,13 @@ pids=()
 cleanup() { echo; echo "[run_missions_hmi] 종료 — 미션 노드 정리"; kill "${pids[@]}" 2>/dev/null; }
 trap cleanup INT TERM EXIT
 
-# c1(소독) : run_missions.sh 와 동일한 스윕 웨이포인트 + HMI 게이트
+# c1(소독) : ★16번(dual SG 툴체인지)★ 첫 웨이포인트 = 노즐 거치대 접근 pose(=carter1 홈 18.5,0,yaw0).
+#   16_dual_sg_tool_changer_integrated.py 의 g_carter1_mission 은 "첫 start_sweep = 노즐 파지(툴체인지),
+#   이후 start_sweep = 소독 스윕" 이라, 거치대 웨이포인트가 맨 앞에 없으면 carter1 이 벽에서 노즐을
+#   잡으려다 실패한다. 뒤 두 개(18.8,8.0 / 18.5,18.5)가 기존 벽면 스윕 웨이포인트.
 ros2 run commander spray_waypoint_mission     --ros-args -p namespace:=carter1 -p use_sim_time:=True \
   -p wait_for_hmi_start:=True \
-  -p sweep_x:="[18.8, 18.5]" -p sweep_y:="[8.0, 18.5]" -p sweep_yaw:="[1.5708, -1.5708]" &
+  -p sweep_x:="[18.5, 18.8, 18.5]" -p sweep_y:="[0.0, 8.0, 18.5]" -p sweep_yaw:="[0.0, 1.5708, -1.5708]" &
 pids+=($!)
 
 # c2(폐기물) : HMI 게이트만 추가

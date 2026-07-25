@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
-from config import ROBOT_IDS, settings
+from config import CARTER_IDS, ROBOT_IDS, settings
 from connection_manager import connection_manager
 from database import init_db
 from robot_bridge import bridge_manager
@@ -26,6 +26,9 @@ logger = logging.getLogger(__name__)
 latest_status: dict[str, dict] = {
     rid: {"process_state": "대기", "recovery_stage": "IDLE"} for rid in ROBOT_IDS
 }
+
+# 자유 클릭 내비게이션용 로봇 위치 캐시(carter1/carter2) — WS 접속 시 스냅샷 전송용.
+latest_pose: dict[str, dict] = {}
 
 broadcast_queue: asyncio.Queue = asyncio.Queue(maxsize=settings.queue_maxsize)
 
@@ -40,6 +43,25 @@ async def _queue_consumer_loop() -> None:
         raw = await broadcast_queue.get()
         robot_id = raw.get("robotId")
         msg_type = raw.get("type")
+
+        # ROBOT_POSE 는 carter1/carter2 네임스페이스라 latest_status(waste/disinfect)에 없다 →
+        # 상태 캐시 가드보다 먼저 처리한다(그대로 통과시켜 좌표 브로드캐스트 + 캐시).
+        if msg_type == "ROBOT_POSE":
+            pose = {
+                "x": raw.get("x"),
+                "y": raw.get("y"),
+                "yaw": raw.get("yaw"),
+            }
+            latest_pose[robot_id] = pose
+            await connection_manager.broadcast(
+                {
+                    "type": "ROBOT_POSE",
+                    "robotId": robot_id,
+                    **pose,
+                    "timestamp": _now_iso(),
+                }
+            )
+            continue
 
         if robot_id not in latest_status:
             continue
@@ -115,6 +137,17 @@ async def ws_robot_status(websocket: WebSocket) -> None:
                 "timestamp": _now_iso(),
             }
         )
+    # 로봇 위치 스냅샷(있으면) — 지도 아이콘 초기 표시.
+    for cid in CARTER_IDS:
+        if cid in latest_pose:
+            await websocket.send_json(
+                {
+                    "type": "ROBOT_POSE",
+                    "robotId": cid,
+                    **latest_pose[cid],
+                    "timestamp": _now_iso(),
+                }
+            )
     try:
         while True:
             # 클라이언트로부터의 수신은 사용하지 않지만 연결 유지를 위해 대기.
