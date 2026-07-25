@@ -24,7 +24,7 @@ trap cleanup INT TERM EXIT
 #   이후 start_sweep = 소독 스윕" 이라, 거치대 웨이포인트가 맨 앞에 없으면 carter1 이 벽에서 노즐을
 #   잡으려다 실패한다. 뒤 두 개(18.8,8.0 / 18.5,18.5)가 기존 벽면 스윕 웨이포인트.
 ros2 run commander spray_waypoint_mission     --ros-args -p namespace:=carter1 -p use_sim_time:=True \
-  -p wait_for_hmi_start:=True \
+  -p wait_for_hmi_start:=True -p dock_first:=True \
   -p sweep_x:="[18.5, 18.8, 18.5]" -p sweep_y:="[0.0, 8.0, 18.5]" -p sweep_yaw:="[0.0, 1.5708, -1.5708]" &
 pids+=($!)
 

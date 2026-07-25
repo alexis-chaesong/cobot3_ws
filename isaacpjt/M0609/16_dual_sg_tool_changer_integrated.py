@@ -96,8 +96,10 @@ from isaacsim.robot.manipulators.manipulators import SingleManipulator
 from isaacsim.robot.manipulators.grippers.surface_gripper import SurfaceGripper
 import isaacsim.robot_motion.motion_generation as mg
 
+import json
+
 import rclpy
-from std_msgs.msg import Bool
+from std_msgs.msg import Bool, String
 from geometry_msgs.msg import Twist, PoseStamped
 from rosgraph_msgs.msg import Clock
 
@@ -975,6 +977,11 @@ def g_tool_change_grasp(ctx):
     파지 실패/IK 실패 시 상공 안전자세로 복귀 후 False 반환(폐기물 grasp 재시도 패턴과 동일 — 실패해도
     최상위 루프가 죽지 않게)."""
     tc = ctx.tool_changer
+    # 긴급정지 취소 신호(start_sweep=False)가 이미 와 있으면 파지 시작 안 함(챠시는 정지 상태라
+    # 주행 위험은 없지만, 취소를 존중해 즉시 STANDBY 로 되돌린다).
+    if ctx.sweep_state.get("req") is False:
+        print("[TOOLCHANGE][ESTOP] 파지 시작 전 취소 감지 → 중단")
+        return False
     handle_position, handle_orientation = tc.approach_tool_stand()
     base_pos, base_quat = read_world_pose(f"{ctx.arm_root}/base_link")
     ik = mg.LulaKinematicsSolver(robot_description_path=IK_DESCRIPTION_PATH, urdf_path=IK_URDF_PATH)
@@ -983,6 +990,9 @@ def g_tool_change_grasp(ctx):
     q_above, ok_above = yield from _tc_solve_and_ramp(
         ctx, ik, handle_position + TC_EE_OFFSET, handle_orientation, None, TC_JOINT_RAMP_STEPS, "노즐 상공 접근")
     if not ok_above:
+        return False
+    if ctx.sweep_state.get("req") is False:      # 상공 접근 후 취소 감지
+        print("[TOOLCHANGE][ESTOP] 상공 접근 후 취소 감지 → 중단")
         return False
     q_grasp, ok_grasp = yield from _tc_solve_and_ramp(
         ctx, ik, handle_position + TC_GRASP_CLEARANCE, handle_orientation, q_above, TC_JOINT_RAMP_STEPS, "노즐 하강")
@@ -1111,6 +1121,16 @@ def g_spray_sweep(ctx, forward_distance=FORWARD_DISTANCE, max_steps=None):
 
     while True:
         step_i += 1
+        # ★긴급정지/취소★ : 미션노드(_hmi_estop)가 /carter1/start_sweep=False 를 발행하면
+        #   sweep_state["req"]=False → 즉시 스윕 중단 + cmd_vel 0. (13_ Carter1Spray.tick 의
+        #   "handoff req False → STANDBY" 와 동일 역할. req 는 소비하지 않고 False 로 남겨둬
+        #   호출부 g_carter1_mission 이 '완료'가 아닌 '취소'로 인지하게 한다.)
+        if ctx.sweep_state.get("req") is False:
+            publish_cmd(0.0, 0.0, drive_state)
+            if spray_fx is not None:
+                spray_fx.clear()
+            print("[SPRAY][ESTOP] /carter1/start_sweep=False 수신 → 스윕 중단, cmd_vel 0")
+            return False
         if max_steps is not None and step_i > max_steps:
             publish_cmd(0.0, 0.0, drive_state)
             if spray_fx is not None:
@@ -1210,6 +1230,16 @@ def g_carter1_mission(ctx):
             ctx.status = "소독 분사 스윕"
             print("[C1][HANDOFF] start_sweep → 소독 스윕 시작")
             yield from g_spray_sweep(ctx)
+
+        # ★긴급정지 처리★ : 방금 단계가 취소(start_sweep=False)로 끝났으면 완료통지(sweep_done)를
+        #   보내면 안 된다(미션이 '스윕 완료'로 오인해 다음 웨이포인트로 진행). 취소 플래그를 소비하고
+        #   cmd_vel 0 확정 후 STANDBY 로 복귀 — 웹 재시작(START)까지 대기.
+        if ctx.sweep_state.get("req") is False:
+            ctx.sweep_state["req"] = None
+            ctx.cmd_pub.publish(Twist())
+            ctx.status = "긴급정지 — STANDBY (재시작 대기)"
+            print("[C1][ESTOP] 단계 취소 감지 → sweep_done 미발행, STANDBY 복귀")
+            continue
 
         # 완료 통지 : /carter1/sweep_done=True 를 ~30스텝 반복 발행(13_ done_ticks 패턴)
         ctx.status = "단계 완료 → /carter1/sweep_done"
@@ -1677,6 +1707,38 @@ def main():
     ros_node = rclpy.create_node("dual_sg_tool_changer_controller")
     clock_pub = ros_node.create_publisher(Clock, "/clock", 10)     # 전역 단일 /clock
 
+    # ── 웹 HMI 긴급정지 인지(/robot/command 직접 구독) ──
+    #   carter2(폐기물)는 최종접근·덤프·도킹 구간을 이 스크립트가 cmd_vel 로 직접 몰기 때문에,
+    #   미션노드의 stop_wheels(0) 만으로는 이 스크립트가 계속 덮어써 안 멈춘다. → 여기서 estop 을
+    #   직접 받아 해당 로봇 제너레이터를 '동결'하고 cmd_vel 0 을 강제한다(메인 루프 아래 참조).
+    #   carter1 은 미션노드가 start_sweep=False 를 쏘고 g_spray_sweep 이 이를 보고 스스로 STANDBY 로
+    #   재동기화하므로 동결하지 않는다(동결하면 재시작 시 미션과 어긋남) — 안전용 cmd_vel 0 만 보조.
+    #   HMI robotId 매핑 : disinfect→carter1, waste→carter2, null→둘 다.
+    estop_flags = {"carter1": False, "carter2": False}
+
+    def _on_hmi_command(msg):
+        try:
+            body = json.loads(msg.data)
+        except (json.JSONDecodeError, TypeError, ValueError):
+            return
+        cmd = body.get("command")
+        rid = body.get("robotId")
+        id_map = {"disinfect": ["carter1"], "waste": ["carter2"],
+                  "carter1": ["carter1"], "carter2": ["carter2"],
+                  None: ["carter1", "carter2"]}
+        targets = id_map.get(rid, [])
+        if cmd == "EMERGENCY_STOP":
+            for t in targets:
+                estop_flags[t] = True
+            print(f"[ESTOP] 긴급정지 수신 → 동결 {targets}")
+        elif cmd == "START":
+            for t in targets:
+                estop_flags[t] = False
+            print(f"[ESTOP] START 수신 → 해제 {targets}")
+
+    ros_node.create_subscription(String, "/robot/command", _on_hmi_command, 10)
+    print("[ROS] /robot/command 구독(긴급정지 인지) — disinfect→carter1, waste→carter2")
+
     c1_ctx = None
     c1_cmd_pub = None
     c1_gen = None
@@ -1782,19 +1844,30 @@ def main():
                 continue
 
             # 두 미션 제너레이터를 매 스텝 한 스텝치씩 전진(협조 루프, 서로 블로킹 안 함).
+            # carter1 : 긴급정지여도 계속 전진시킨다(그래야 g_spray_sweep 이 start_sweep=False 를
+            #   보고 스스로 멈추고 STANDBY 로 재동기화). 추가로 안전용 cmd_vel 0 을 덮어씀.
             if not c1_done:
                 try:
                     next(c1_gen)
                 except StopIteration:
                     c1_done = True
                     print("[C1] 미션 제너레이터 종료")
+                if estop_flags["carter1"] and c1_cmd_pub is not None:
+                    c1_cmd_pub.publish(Twist())
 
+            # carter2 : 긴급정지면 제너레이터를 '동결'(전진 안 함)하고 cmd_vel 0 강제 → 이 스크립트가
+            #   최종접근/덤프/도킹 구간에서 forward cmd_vel 로 덮어쓰던 것을 차단. START 로 해제되면
+            #   같은 지점에서 이어서 재개(미션노드가 Isaac 재발행 goal 을 다시 릴레이해 재동기화).
             if not c2_done:
-                try:
-                    next(c2_gen)
-                except StopIteration:
-                    c2_done = True
-                    print("[C2] 미션 제너레이터 종료")
+                if estop_flags["carter2"]:
+                    if c2_cmd_pub is not None:
+                        c2_cmd_pub.publish(Twist())
+                else:
+                    try:
+                        next(c2_gen)
+                    except StopIteration:
+                        c2_done = True
+                        print("[C2] 미션 제너레이터 종료")
 
             # ── 하트비트 : 두 로봇 미션이 모두 살아 도는지 + 각자 무엇을 기다리는지 (~5초) ──
             hb += 1

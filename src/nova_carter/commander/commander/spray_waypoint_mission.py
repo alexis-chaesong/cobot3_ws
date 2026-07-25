@@ -125,6 +125,9 @@ class SprayWaypointMission(Node):
         # 한 번 실패로 그 지점을 건너뛰지 않고 N회 재시도(그 사이 AMCL 수렴) → "통합 시작
         # 눌러도 안 움직임" 완화. 0 이면 재시도 없음(기존 동작).
         self.declare_parameter("nav_retries", 3)
+        # 16번 dual-SG : 첫 웨이포인트가 노즐 거치대(툴체인지)면 True. 스윕 라벨을 한 칸 밀어
+        # i==0="노즐 장착", i==1="소독 분사", i>=2="유턴 재분사" 로 발행(프론트 DISINFECT_STEPS 매칭).
+        self.declare_parameter("dock_first", False)
 
         self._active_goal_handle = None       # 진행 중 Nav2 goal (긴급정지 취소용)
         self._hmi = None
@@ -257,33 +260,62 @@ class SprayWaypointMission(Node):
     # ── 미션 한 패스 (긴급정지 시 _Estop 로 중단됨) ───────────────
     def _run_pass(self, sweeps, settle):
         # 소독 단계 → 프론트 DISINFECT_STEPS 라벨 매핑:
-        #   이동="복도 진입", 도착후 안정화="노즐 접촉", 스윕=WP0"소독 분사"/그외"유턴 재분사", 복귀="복귀"
+        #   이동="복도 진입", 도착후 안정화="노즐 접촉", 스윕 라벨=아래 dock_first 분기, 복귀="복귀"
+        # ★dock_first(16번 dual-SG)★ : 첫 웨이포인트가 "노즐 거치대"라 거기서의 start_sweep 은
+        #   실제로는 소독이 아니라 "노즐 장착(툴체인지)"이다 → i==0 라벨을 "노즐 장착"으로,
+        #   실제 첫 소독(i==1)을 "소독 분사"로 한 칸씩 민다. dock_first=False(기본, 13번)면 종전대로.
+        dock_first = bool(self.get_parameter("dock_first").value)
         for i, (x, y, yaw, enable) in enumerate(sweeps):
             self._check_estop()
             self.get_logger().info(
                 f"[{i+1}/{len(sweeps)}] → 이동 ({x:.2f},{y:.2f},{yaw:.2f}) sweep={enable}")
-            self._publish_state("복도 진입")
-            retries = max(1, int(self.get_parameter("nav_retries").value))
-            arrived = False
-            for attempt in range(retries):
-                self._check_estop()
-                if self.navigate_to(x, y, yaw):
-                    arrived = True
-                    break
-                self._check_estop()                  # 취소로 인한 실패면 여기서 중단
-                self.get_logger().warn(
-                    f"  도착 실패 (시도 {attempt + 1}/{retries})"
-                    + (" — 재시도" if attempt + 1 < retries else ""))
+            # 거치대(dock_first, i==0)로의 이동은 사실상 제자리(carter1 이 이미 거치대 근처 스폰)라
+            # "복도 진입"으로 표시하면 어색하다 → "노즐 접촉"으로 발행(물리 순서와 UI 순서 일치).
+            self._publish_state("노즐 접촉" if (dock_first and i == 0) else "복도 진입")
+            # ★거치대 웨이포인트 주행 생략★ : dock_first 의 첫 웨이포인트(거치대)는 carter1 스폰/홈
+            #   (home_x,home_y=18.5,0)과 같은 좌표라, navigate_to 하면 '제자리(0거리) goal' 이 되어
+            #   Nav2 가 목표 허용오차를 못 맞추고 그 자리에서 빙빙 도는(회전 recovery) 현상이 난다.
+            #   carter1 은 이미 거치대에 있으니 주행을 건너뛰고 바로 파지(툴체인지)로 넘어간다.
+            #   (home=거치대라 loop/복귀 후에도 항상 거치대에서 시작하므로 안전.)
+            if dock_first and i == 0:
+                self.get_logger().info("  [DOCK] 거치대=홈 좌표 → 주행 생략(제자리 회전 방지) → 바로 파지")
+                arrived = True                       # 주행 없이 바로 파지 단계로
+            else:
+                retries = max(1, int(self.get_parameter("nav_retries").value))
+                arrived = False
+                for attempt in range(retries):
+                    self._check_estop()
+                    if self.navigate_to(x, y, yaw):
+                        arrived = True
+                        break
+                    self._check_estop()              # 취소로 인한 실패면 여기서 중단
+                    self.get_logger().warn(
+                        f"  도착 실패 (시도 {attempt + 1}/{retries})"
+                        + (" — 재시도" if attempt + 1 < retries else ""))
             if not arrived:
                 self.get_logger().warn("  재시도 후에도 도착 실패 → 이 지점 건너뜀")
                 continue
             self.get_logger().info("  도착.")
             if enable:
                 self._check_estop()
-                self._publish_state("노즐 접촉")
-                self._settle(settle)                 # 정지 안정화 후 트리거
-                self._check_estop()
-                self._publish_state("소독 분사" if i == 0 else "유턴 재분사")
+                # 거치대(dock_first,i==0)=노즐 접촉→노즐 장착. 벽면=도착 후 바로 스윕(노즐 이미 장착).
+                if dock_first and i == 0:
+                    self._publish_state("노즐 접촉")   # 위 move 라벨과 dedup(중복 발행 억제됨)
+                    self._settle(settle)
+                    self._check_estop()
+                    sweep_label = "노즐 장착"
+                elif dock_first:
+                    # 벽면: 별도 "노즐 접촉" 라벨 없이 안정화(UI 는 "복도 진입" 유지) → 뒤로 점프 방지.
+                    self._settle(settle)
+                    self._check_estop()
+                    sweep_label = "소독 분사" if i == 1 else "유턴 재분사"
+                else:
+                    # 13번 호환(dock_first=False): 종전대로 벽면 접촉 라벨 사용.
+                    self._publish_state("노즐 접촉")
+                    self._settle(settle)
+                    self._check_estop()
+                    sweep_label = "소독 분사" if i == 0 else "유턴 재분사"
+                self._publish_state(sweep_label)
                 self.run_sweep()                     # /start_sweep → /sweep_done 대기
                 self._check_estop()
                 self._reset_sweep()                  # 확실히 STANDBY 로 되돌림(잔류 트리거 제거)

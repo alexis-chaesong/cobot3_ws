@@ -103,6 +103,43 @@ async def get_history(robot_id: Optional[str] = None, limit: int = 50):
         conn.close()
 
 
+@router.post("/commands/navigate/{robot_id}", response_model=CommandResult)
+async def navigate(robot_id: str, payload: NavigateRequest) -> CommandResult:
+    # 자유 클릭 이동은 carter1/carter2(ROS 네임스페이스)만 대상 — waste/disinfect(HMI id)와는 별개 체계.
+    if robot_id not in CARTER_IDS:
+        raise HTTPException(status_code=404, detail=f"알 수 없는 robot_id: {robot_id}")
+    ok = bridge_manager.publish_nav_goal(robot_id, payload.x, payload.y, payload.yaw)
+    if not ok:
+        raise HTTPException(status_code=503, detail="goal publisher 미초기화")
+    return CommandResult(result="SUCCESS", robot_id=robot_id)
+
+
+@router.get("/map-info", response_model=MapInfo)
+async def get_map_info() -> MapInfo:
+    _, png_path, parsed = _load_map_paths()
+    if "resolution" not in parsed or "origin" not in parsed:
+        raise HTTPException(status_code=500, detail="map yaml 파싱 실패(resolution/origin 없음)")
+    if not os.path.isfile(png_path):
+        raise HTTPException(status_code=404, detail=f"map 이미지 없음: {png_path}")
+    width, height = _png_size(png_path)
+    origin_x, origin_y = parsed["origin"]
+    return MapInfo(
+        resolution=parsed["resolution"],
+        origin_x=origin_x,
+        origin_y=origin_y,
+        width=width,
+        height=height,
+    )
+
+
+@router.get("/map-image")
+async def get_map_image() -> FileResponse:
+    _, png_path, _ = _load_map_paths()
+    if not os.path.isfile(png_path):
+        raise HTTPException(status_code=404, detail=f"map 이미지 없음: {png_path}")
+    return FileResponse(png_path, media_type="image/png")
+
+
 @router.get("/errors")
 async def get_errors(robot_id: Optional[str] = None, limit: int = 50):
     conn = get_connection()

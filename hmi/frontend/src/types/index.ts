@@ -26,7 +26,33 @@ export interface SafetyEventMessage {
   timestamp: string;
 }
 
-export type WsMessage = RobotStatusMessage | SafetyEventMessage;
+// 자유 클릭 내비게이션 전용 식별자 = ROS 네임스페이스(carter1/carter2).
+// 매핑: carter1=소독(disinfect, blue), carter2=폐기물(waste, red). RobotId(waste/disinfect)와는 별개 체계.
+export type CarterId = "carter1" | "carter2";
+
+/**
+ * 로봇 위치(map 프레임) 실시간 메시지. amcl_pose 에서 유도됨.
+ * robotId 는 RobotId(waste/disinfect)가 아니라 CarterId(carter1/carter2)를 쓴다.
+ */
+export interface RobotPoseMessage {
+  type: "ROBOT_POSE";
+  robotId: CarterId;
+  x: number;
+  y: number;
+  yaw: number; // 라디안
+  timestamp: string;
+}
+
+export type WsMessage = RobotStatusMessage | SafetyEventMessage | RobotPoseMessage;
+
+/** Nav2 맵 메타데이터 (map.yaml 값 그대로 + png 크기). 픽셀↔world 좌표 변환에 사용. */
+export interface MapInfo {
+  resolution: number;
+  originX: number;
+  originY: number;
+  width: number;
+  height: number;
+}
 
 /**
  * 프론트가 화면 렌더에 쓰는, robotId별로 정규화된 상태 스냅샷.

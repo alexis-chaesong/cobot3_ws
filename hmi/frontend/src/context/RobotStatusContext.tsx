@@ -45,14 +45,27 @@ function initialSnapshots(): SnapshotMap {
 /**
  * process_state 문자열 → steps 배열 인덱스.
  * "폐기물통 파지 중"처럼 뒤에 " 중"이 붙어도 매칭되도록 startsWith 비교.
- * 매칭 실패 시 -1 (호출부에서 이전 인덱스 유지).
+ * ★같은 라벨이 배열에 두 번 있을 때(소독 로봇의 "복도 진입" 1·2차)★ 현재 인덱스부터 앞으로
+ * 먼저 탐색해 '뒤로 점프'를 막는다(예: 소독 분사(4) → 복도 진입은 3 이 아니라 5 로 전진).
+ * 앞에서 못 찾으면(대기로의 리셋 등) 처음부터 다시 탐색한다. 매칭 실패 시 -1.
  */
-function resolveStepIndex(robotId: RobotId, processState: string): number {
+function resolveStepIndex(
+  robotId: RobotId,
+  processState: string,
+  fromIndex = 0,
+): number {
   const steps = STEPS_BY_ROBOT[robotId];
   const clean = processState.replace(/\s*중$/, "").trim();
-  const exact = steps.indexOf(clean);
-  if (exact >= 0) return exact;
-  return steps.findIndex((s) => processState.startsWith(s));
+  const matches = (s: string) => s === clean || processState.startsWith(s);
+  // 1) 현재 단계부터 앞으로 (반복 라벨은 다음 것으로 전진)
+  for (let i = Math.max(0, fromIndex); i < steps.length; i++) {
+    if (matches(steps[i])) return i;
+  }
+  // 2) 앞에 없으면 처음부터 (사이클 재시작 · 대기 복귀 등 뒤로 가는 정상 전이)
+  for (let i = 0; i < steps.length; i++) {
+    if (matches(steps[i])) return i;
+  }
+  return -1;
 }
 
 /** 상태 판정 규칙. 🔧 튜닝 포인트. */
@@ -75,13 +88,21 @@ export function RobotStatusProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     const handle = (msg: WsMessage) => {
+      // ROBOT_POSE 는 carter1/carter2(CarterId) 대상이라 이 스냅샷맵(waste/disinfect)엔 없다.
+      // useRobotPose 가 별도로 구독하므로 여기선 무시(가드 없으면 prev[carterId] 인덱싱 에러).
+      if (msg.type === "ROBOT_POSE") return;
+
       setSnapshots((prev) => {
         const cur = prev[msg.robotId];
         if (!cur) return prev;
 
         if (msg.type === "ROBOT_STATUS") {
           const { process_state, recovery_stage } = msg.payload;
-          const idx = resolveStepIndex(msg.robotId, process_state);
+          const idx = resolveStepIndex(
+            msg.robotId,
+            process_state,
+            cur.currentStepIndex,
+          );
           return {
             ...prev,
             [msg.robotId]: {

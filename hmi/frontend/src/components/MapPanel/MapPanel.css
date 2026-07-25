@@ -1,0 +1,127 @@
+.map-panel {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.map-panel__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+}
+
+.map-panel__toggle {
+  display: flex;
+  gap: 8px;
+}
+
+.map-panel__toggle-btn {
+  font-size: 12px;
+  font-weight: 600;
+  padding: 6px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface-page);
+  color: var(--ink-muted);
+}
+.map-panel__toggle-btn--disinfect.map-panel__toggle-btn--active {
+  background: var(--disinfect-accent);
+  border-color: var(--disinfect-accent);
+  color: #fff;
+}
+.map-panel__toggle-btn--waste.map-panel__toggle-btn--active {
+  background: var(--waste-accent);
+  border-color: var(--waste-accent);
+  color: #fff;
+}
+
+.map-panel__stage {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 720 / 520;
+  background: #0e1519;
+  overflow: hidden;
+}
+
+.map-panel__canvas {
+  width: 100%;
+  height: 100%;
+  display: block;
+  cursor: crosshair;
+}
+
+.map-panel__placeholder {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  color: #6b7d86;
+  font-size: 13px;
+}
+
+.map-panel__confirm {
+  position: absolute;
+  transform: translate(-50%, -100%);
+  margin-top: -18px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  background: var(--surface-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-panel);
+  padding: 8px 10px;
+  white-space: nowrap;
+  z-index: 2;
+}
+
+.map-panel__confirm-coord {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink-muted);
+}
+
+.map-panel__confirm-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.map-panel__confirm-go {
+  font-size: 12px;
+  font-weight: 700;
+  color: #fff;
+  background: var(--state-running);
+  border: none;
+  border-radius: var(--radius-sm);
+  padding: 6px 12px;
+}
+.map-panel__confirm-go:hover {
+  filter: brightness(0.94);
+}
+.map-panel__confirm-go:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.map-panel__confirm-cancel {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink-muted);
+  background: var(--surface-page);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 6px 12px;
+}
+.map-panel__confirm-cancel:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
