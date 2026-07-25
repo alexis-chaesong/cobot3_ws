@@ -1,55 +1,67 @@
 """
-13_multi_robot_integrated.py  ★멀티로봇 Phase B — 통합 Isaac 스크립트★
+16_dual_sg_tool_changer_integrated.py  ★멀티로봇 Phase C — 로봇 2대 모두 Surface Gripper★
 ================================================================================
-한 씬(modified_hospital) 에 두 로봇을 함께 스폰하고, 각자 OmniGraph node_namespace 를
-프로그램적으로 carter1/carter2 로 설정한 뒤, 하나의 /clock 을 공유하며 두 로봇의 FSM 을
-"한 물리 스텝 루프" 안에서 협조적으로(cooperative, 서로를 블로킹하지 않게) 동시 구동한다.
+13_multi_robot_integrated.py 를 베이스로, 로봇 2대(carter1=소독 / carter2=폐기물)를 한 씬
+(modified_hospital)에 스폰하되 ★둘 다 Surface Gripper 하드웨어★로 통일한다. 역할 분담은
+13_ 과 동일(carter1=소독 전담, carter2=폐기물 전담) — 역할을 섞지 않는다.
 
-  · carter1 (소독)   : Nova Carter + m0609 노즐팔. 스폰 docking_station_1 (18.5, 0).
-                       핸드오프 stop-and-go 소독 스윕. 10_1_carter_hospital_spray_nav.py 로직 그대로.
+  · carter1 (소독)   : Nova Carter + m0609 Surface Gripper (13_ 의 "노즐 직접 부착"에서 변경).
+                       스폰 docking_station_1 (18.5, 0). 이제 시작 시 노즐이 붙어있지 않고,
+                       그리퍼로 노즐 거치대(NozzleDock)의 분사노즐을 ★툴체인지(attach)★ 한 뒤
+                       기존 소독 스윕(벽면 상하 스윕 + 전진)을 수행한다. 툴체인지/스윕 로직은
+                       15_single_robot_tool_changer_integrated.py 에서 검증한 것을 그대로 이식.
                        조율 토픽 : /carter1/start_sweep(←) · /carter1/sweep_done(→) · /carter1/cmd_vel.
-  · carter2 (폐기물) : Nova Carter + m0609 Surface Gripper + 소형 쓰레기통. 스폰 docking_station_02
-                       (16.6629, -0.00295). Nav2 주행→파지→big_trash 덤프.
-                       4_mobile_manipulator_trash_can_nav_pick_test.py 로직 그대로(제너레이터화).
+                       핸드오프 계약(start_sweep/sweep_done)은 13_ 과 100% 동일 — ★첫 start_sweep
+                       (거치대 웨이포인트 도착) = 노즐 파지, 이후 start_sweep = 소독 스윕★ 으로만 확장.
+  · carter2 (폐기물) : Nova Carter + m0609 Surface Gripper + 소형 쓰레기통. 13_ 과 로직 100% 동일.
+                       스폰 docking_station_02 (16.6629, -0.00295). Nav2 주행→파지→big_trash 덤프
+                       →원위치 복귀→도킹. 4_mobile_manipulator_trash_can_nav_pick_test.py 제너레이터.
                        조율 토픽 : /carter2/trash_can_nav_goal(→) · /carter2/start_pick(←) · /carter2/cmd_vel.
 
-두 로봇 병합의 핵심 = 프림 경로 분리 + namespace :
-  · 두 Nova Carter 는 각각 /World/Carter1/Nova_Carter_ROS, /World/Carter2/Nova_Carter_ROS 로
-    "스코프(scope) prim 아래"에 놓아 경로 충돌을 피한다(단일로봇 스크립트는 둘 다 /World/Nova_Carter_ROS).
-  · 각 Carter 내부 4개 ActionGraph(ros_lidars·transform_tree_odometry·differential_drive·chassis_imu)의
-    node_namespace(Constant String) 노드 inputs:value 를 carter1/carter2 로 설정 → 그 로봇의 모든 ROS
-    토픽/TF 에 /carterN 접두가 붙는다(PDF "Nova Carter2 추가"의 GUI 작업을 코드로). set_carter_namespace().
-  · /clock 은 네임스페이스 없는 전역 토픽 → 이 스크립트가 "딱 하나"만 발행(두 로봇 Nav2 가 공유).
+★ROS2 네임스페이스 확정(요구사항 #4 — 이후 대시보드 자유클릭 내비게이션에서 재사용)★ :
+  · carter1(소독)   → 접두 "/carter1"  (예: /carter1/cmd_vel, /carter1/scan, /carter1/tf,
+                       /carter1/chassis/odom, /carter1/start_sweep, /carter1/sweep_done)
+  · carter2(폐기물) → 접두 "/carter2"  (예: /carter2/cmd_vel, /carter2/scan, /carter2/tf,
+                       /carter2/chassis/odom, /carter2/trash_can_nav_goal, /carter2/start_pick)
+  · /clock 만 네임스페이스 없는 전역(두 로봇 Nav2 공유) — 이 스크립트가 딱 하나 발행.
+  · HMI robotId 매핑(웹 대시보드) : "disinfect"=carter1, "waste"=carter2 (hmi_link.py 참조).
 
-협조 루프(데드락 방지) :
-  · carter1 은 상태머신 tick() (10_1 while 루프 몸통 1회 = 1 스텝, 내부에서 world.step 안 부름).
-  · carter2 는 파이썬 제너레이터(4_ 의 블로킹 world.step(render=True) 를 전부 yield 로 치환) →
-    main 루프가 매 스텝 next() 로 "한 스텝치"만 전진. 두 로봇이 같은 my_world.step 을 공유한다.
+두 로봇 병합의 핵심 = 프림 경로 분리 + namespace :
+  · 두 Nova Carter 는 각각 /World/Carter1, /World/Carter2 스코프 prim 아래에 놓아 경로 충돌을 피한다.
+  · ★변경점(13_ 대비)★ : carter1 도 carter2 와 동일한 move_tash_can.usd(Nova+그리퍼팔) 를 참조해
+    검증된 Surface Gripper 팔을 그대로 얻는다. carter1 은 폐기물을 안 하므로 그 안의 쓰레기통 prim 을
+    비활성화(SetActive(False))하고, 대신 스폰 근처에 NozzleDock(노즐 거치대) 를 세운다.
+  · 각 Carter 내부 4개 ActionGraph 의 node_namespace 를 carter1/carter2 로 설정. set_carter_namespace().
+
+협조 루프(데드락 방지) — 13_ 과 동일하되 carter1 도 제너레이터화 :
+  · carter1 : 제너레이터(g_carter1_mission) — 첫 start_sweep=노즐 파지(g_tool_change_grasp),
+              이후 start_sweep=소독 스윕(g_spray_sweep). (13_ 의 Carter1Spray.tick() 상태머신 대체.)
+  · carter2 : 제너레이터(carter2_mission) — 13_ 그대로. main 루프가 매 스텝 두 제너레이터를 next().
 
 실행 (총 5개 터미널 권장) :
-  1) 이 스크립트 : python.sh isaacpjt/M0609/13_multi_robot_integrated.py  → GUI 에서 두 로봇 확인 후 Play ▶
+  1) 이 스크립트 : python.sh isaacpjt/M0609/16_dual_sg_tool_changer_integrated.py → GUI 에서 Play ▶
   2) Nav2(멀티) : ros2 launch carter_navigation \
         multiple_robot_carter_navigation_modified_hospital.launch.py \
         map:=<carter_navigation>/maps/map/modified_hospital_map.yaml
-  3) carter1 미션 : ros2 run commander spray_waypoint_mission --ros-args -p namespace:=carter1
+  3) carter1 미션 : ros2 run commander spray_waypoint_mission --ros-args -p namespace:=carter1 \
+        -p sweep_x:="[<dock_x>, 18.8, 18.5]" -p sweep_y:="[<dock_y>, 8.0, 18.5]" \
+        -p sweep_yaw:="[<dock_yaw>, 1.5708, -1.5708]"
+        ※ ★첫 웨이포인트 = 노즐 거치대 접근 pose(NOZZLE_DOCK_APPROACH)★ 를 반드시 맨 앞에 추가할 것.
+          거기서 첫 start_sweep 이 "노즐 파지"를 트리거하고, 이후 웨이포인트에서 실제 소독 스윕이 돈다.
   4) carter2 미션 : ros2 run commander trash_can_nav_pick_mission --ros-args -p namespace:=carter2
+  · 웹 HMI 게이트 사용 시 : run_missions_hmi.sh (wait_for_hmi_start:=True) — "통합 시작/개별 시작"
+    버튼(→ /robot/command {command:START, robotId}) 계약은 ROS 미션노드(hmi_link.py) 측이므로 이
+    스크립트는 변경 불필요. 통합시작=두 미션 동시, 개별시작=robotId 로 한 로봇만.
 
 ────────────────────────────────────────────────────────────────────────────────
-⚠ Isaac 반복 검증 필요(오프라인 미검증) — 최초 실행 시 확인 포인트 :
-  [V1] Play 후 두 스폰 위치 로그([SPAWN] c1/c2 chassis world) 가 (18.5,0)/(16.66,0) 근처인지.
-  [V2] `ros2 topic list` 에 /carter1/scan·/carter1/cmd_vel·/carter1/tf·/carter1/chassis/odom 및
-       /carter2/... 가 보이는지(=namespace 성공). 안 보이면 set_carter_namespace 로그/그래프 경로 확인.
-  [V3] 두 로봇 각각 팔 초기화(arm_ready)·주행이 서로 간섭 없이 도는지(협조 루프).
-  [V4] carter2 파지 상대기하(TARGET_JOINTS_DEG)가 nested 경로에서도 유효한지(프림 경로만 바뀌고
-       상대 pose 는 그대로여야 함 — 아니면 스코프 xform 이 identity 인지 확인).
-  ※ carter2 는 4_ 와 동일하게 "연속 Play" 전제(Stop→Play 재개 미지원 — 제너레이터/physics 뷰
-     상태가 리셋 안 됨). 재시작하려면 스크립트 프로세스를 재실행할 것. carter1 은 Stop→Play 재초기화 지원.
-
-✅ 오프라인 헤드리스 스모크 검증 완료(2026-07-22) : 씬 합성·프림경로 분리·노즐팔 fixed-joint 병합·
-   node_namespace 프로그램 설정(c1/c2 각 4개 그래프)·articulation root/DOF(각 13, 팔6 포함)·스폰
-   좌표(18.5,0 / 16.66,-0.003)·그리퍼/쓰레기통/노즐/지면 유효·40스텝 물리안정 = 전부 PASS.
-   (미검증: carter1 IK·carter2 RMPflow·ROS 핸드오프·Nav2 연동·FSM 실동작/튜닝 → Isaac+Nav2 루프 필요.
-    이 파트들은 단일로봇 10_1/4_ 에서 이미 검증된 로직 그대로 이식.)
+⚠ Isaac+Nav2 라이브 검증 필요(오프라인 헤드리스로는 씬합성/제너레이터 유휴까지만 확인 가능) :
+  [V1] Play 후 두 스폰 위치([SPAWN] c1/c2 chassis world) 가 (18.5,0)/(16.66,0) 근처인지.
+  [V2] `ros2 topic list` 에 /carter1/... 와 /carter2/... 가 충돌 없이 분리돼 보이는지(namespace).
+  [V3] carter1 이 거치대 웨이포인트에서 노즐 파지 성공([TOOLCHANGE] 노즐 파지 성공) 후 스윕 수행.
+  [V4] carter2 가 기존과 동일한 파지/덤프/복귀/도킹 시퀀스를 정상 수행(상대기하 TARGET_JOINTS_DEG).
+  [V5] carter1 파지 IK 도달성 : NOZZLE_DOCK_XY 와 거치대 접근 웨이포인트가 맞아야 함(도달범위 밖이면
+       [TOOLCHANGE][WARN] IK 실패) — 라이브 실측으로 NOZZLE_DOCK_XY/접근 pose 미세조정 필요할 수 있음.
+  ※ 연속 Play 전제(Stop→Play 재개 미지원 — 제너레이터/physics 뷰 상태 리셋 안 됨).
 ================================================================================
 """
 import os
@@ -57,8 +69,7 @@ import os
 from isaacsim import SimulationApp
 
 # 기본 GUI. 스모크 테스트/헤드리스 실행 시 ISAAC_HEADLESS=1 로 창 없이 부팅.
-# 원격 노트북에서 WebRTC로 볼 때는 LIVESTREAM=1 (NVIDIA Isaac Sim WebRTC Streaming Client 필요,
-# 렌더 서버가 곧 창이라 headless 로 부팅하되 omni.kit.livestream.webrtc 로 화면을 스트리밍한다).
+# 원격 노트북에서 WebRTC로 볼 때는 LIVESTREAM=1 (NVIDIA Isaac Sim WebRTC Streaming Client 필요).
 _LIVESTREAM = os.environ.get("LIVESTREAM", "0") == "1"
 simulation_app = SimulationApp({
     "headless": os.environ.get("ISAAC_HEADLESS", "0") == "1" or _LIVESTREAM
@@ -99,13 +110,21 @@ if _C2_RMPFLOW_DIR not in sys.path:
     sys.path.insert(0, _C2_RMPFLOW_DIR)
 from m0609_rmpflow_controller import RMPFlowController  # noqa: E402
 
+# [16번 신규] carter1 Surface-Gripper 툴체인지 : 15_single_robot_tool_changer_integrated.py 가
+# 재사용한 것과 동일한 ToolChangerController / surface_gripper_utils (isaac_wiping_task).
+_TOOL_CHANGER_DIR = str(_WS_ROOT / "src" / "isaac_wiping_task")
+if _TOOL_CHANGER_DIR not in sys.path:
+    sys.path.insert(0, _TOOL_CHANGER_DIR)
+import surface_gripper_utils  # noqa: E402
+from tool_changer import ToolChangerController  # noqa: E402
+
 
 # ════════════════════════════════════════════════════════════════════════════
 #  A. 공통 경로/상수
 # ════════════════════════════════════════════════════════════════════════════
 # 환경/맵 : Nav2 멀티런치가 로드하는 modified_hospital_map.yaml 과 같은 씬(같은 world 프레임).
-# carter_navigation 은 이 레포 밖의 별도 워크스페이스(=Isaac Sim 공식 ROS2 예제 워크스페이스)에
-# 있어 상대경로로 못 잡는다 — CARTER_NAV_WS env var 로 override 가능(기본값 = 팀 관례 위치).
+# carter_navigation 은 이 레포 밖의 별도 워크스페이스에 있어 상대경로로 못 잡는다 —
+# CARTER_NAV_WS env var 로 override 가능(기본값 = 팀 관례 위치).
 _CARTER_NAV_WS = Path(os.environ.get(
     "CARTER_NAV_WS", str(Path.home() / "IsaacSim-ros_workspaces" / "humble_ws")
 ))
@@ -143,15 +162,24 @@ C2_SCOPE = "/World/Carter2"
 
 
 # ════════════════════════════════════════════════════════════════════════════
-#  B. carter1 (소독) 상수 — 10_1_carter_hospital_spray_nav.py 와 동일 값
+#  B. carter1 (소독 + 툴체인저) 상수
+#     ★16번 변경★ : 13_ 은 carter1 을 m0609_with_nozzle.usd(노즐 직접 부착)로 스폰했으나,
+#     이제 carter2 와 동일한 move_tash_can.usd(Nova + Surface Gripper 팔)를 참조해 검증된
+#     그리퍼 팔을 그대로 얻는다. 폐기물은 안 하므로 그 안 쓰레기통 prim 은 비활성화하고,
+#     스폰 근처에 노즐 거치대(NozzleDock)를 세워 그리퍼로 노즐을 툴체인지(attach)한다.
 # ════════════════════════════════════════════════════════════════════════════
 C1_CARTER_PRIM = f"{C1_SCOPE}/Nova_Carter_ROS"
 C1_CHASSIS = f"{C1_CARTER_PRIM}/chassis_link"
+C1_ARTICULATION_ROOT = C1_CHASSIS                    # SingleManipulator articulation root(= 챠시)
 C1_ARM = f"{C1_SCOPE}/m0609"
+C1_ARM_ROOT = C1_ARM                                 # 15_ 제너레이터가 쓰는 ctx.arm_root 값
+C1_EE_LINK_NAME = "link_6"
 C1_EE_LINK = f"{C1_ARM}/link_6"
 C1_BASE_LINK = f"{C1_ARM}/base_link"
-C1_ROOT_JOINT = f"{C1_ARM}/root_joint"
-C1_NOZZLE_BASE = f"{C1_ARM}/nozzle_base_link"
+C1_SURFACE_GRIPPER = f"{C1_ARM}/{C1_EE_LINK_NAME}/mop_surface_gripper"
+C1_TRASH_CAN_PRIM = f"{C1_SCOPE}/small_trash_can_body"   # carter1 은 폐기물 안 함 → 비활성화
+C1_GROUND_PLANE = f"{C1_SCOPE}/GroundPlane"
+C1_EXTRA_PHYSICS = f"{C1_SCOPE}/PhysicsScene"           # move_tash_can 내장 중복 PhysicsScene → 비활성화
 
 C1_START_POSE = dict(x=18.5, y=0.0, z=0.05, yaw_deg=0.0)     # docking_station_1
 MOUNT_OFFSET = Gf.Vec3d(-0.2317, 0.0, 0.5773)
@@ -160,11 +188,43 @@ DRIVE_MAX_ANG_SPEED = 2.5
 DRIVE_MAX_ANG_ACCEL = 6.0
 DRIVE_MAX_LIN_SPEED = 1.2
 
+# 조준/툴체인지 IK (carter1 rmpflow 자산 재사용 — 15_ 의 IK_URDF_PATH/IK_DESCRIPTION_PATH 와 동일 파일)
 C1_URDF = str(_THIS_DIR / "rmpflow" / "m0609_isaac_sim.urdf")
 C1_DESC = str(_THIS_DIR / "rmpflow" / "m0609_description.yaml")
-NOZZLE_OFFSET = 0.1392
-NOZZLE_TIP_LOCAL = 0.142
+IK_URDF_PATH = C1_URDF
+IK_DESCRIPTION_PATH = C1_DESC
 EE_FRAME = "link_6"
+
+# ── 노즐 거치대(NozzleDock) — 15_single_robot_tool_changer_integrated.py 이식 ──
+NOZZLE_SOURCE_PRIMPATH = "/World/m0609/nozzle_base_link"   # tool0_to_nozzle 조인트 밖(형제) — 안 딸려옴
+NOZZLE_DOCK_SCOPE = "/World/NozzleDock"
+NOZZLE_TOOL_PATH = f"{NOZZLE_DOCK_SCOPE}/nozzle_tool"
+NOZZLE_TCP_PATH = f"{NOZZLE_TOOL_PATH}/nozzle_tcp"
+NOZZLE_HOLD_JOINT_PATH = f"{NOZZLE_DOCK_SCOPE}/hold_joint"
+NOZZLE_HOLD_ANCHOR_PATH = f"{NOZZLE_DOCK_SCOPE}/hold_anchor"
+# 거치대 위치 : carter1 스폰(18.5,0) 정면(+X) 0.35m — 15_ 에서 검증한 챠시-거치대 standoff(0.35m).
+# ★거치대 접근 웨이포인트(NOZZLE_DOCK_APPROACH) = carter1 스폰 pose★ 로 두면 파지 IK 도달범위 안.
+# (라이브 실측으로 미세조정 필요할 수 있음 — 벽/도달성 확인. V5 참고.)
+NOZZLE_DOCK_XY = np.array([18.85, 0.0])
+NOZZLE_DOCK_HEIGHT = 0.65
+
+# Surface Gripper 튜닝(15_ 2단계 검증값 — grip_travel 을 IK 접근오차보다 넉넉히, clearance 는 최소).
+MAX_GRIP_DISTANCE = 0.04
+GRIP_DRIVE_STIFFNESS = 5000.0
+GRIP_DRIVE_DAMPING = 100.0
+CLEARANCE_OFFSET = 0.0005
+GRIP_TRAVEL = 0.015
+
+# 툴체인지 접근/파지 상수(15_ / 2_tool_changer_nozzle_demo.py 검증값 — 수직 매달기).
+TC_APPROACH_ORIENTATION = np.array([0.0, 1.0, 0.0, 0.0])   # 로컬 Z가 world -Z (팁 아래로)
+TC_EE_OFFSET = np.array([0.0, 0.0, 0.15])                  # 접근 시 위 여유공간
+TC_GRASP_CLEARANCE = np.zeros(3)
+TC_FINGERTIP_OFFSET_FROM_TOOL0 = np.zeros(3)               # 맨몸 팔 : fingertip(link_6)≈tool0
+TC_GRASP_SETTLE_STEPS = 30
+TC_REDOCK_SETTLE_STEPS = 20
+TC_JOINT_RAMP_STEPS = 200
+# URDF-USD 형상 불일치 고정 바이어스 보정(15_ 실측, TC_APPROACH_ORIENTATION 접근에만 유효).
+TC_TARGET_BIAS_COMPENSATION = np.array([0.006, -0.0003, 0.0])
 
 WALL_X = 0.575
 AIM_Y = 0.0
@@ -180,6 +240,8 @@ S_ACCEL = 3.0
 S_HOLD_STEPS = 6
 STOW_Q = np.array([0.0, -1.5708, 1.5708, 0.0, 0.0, 0.0])
 MAX_JOINT_STEP = 0.06
+# 파지 직후 자세 → 스윕 저점(q_of_s(-1.0)) 진입을 부드럽게(15_ GUI 확인 후 추가).
+SPRAY_ENTRY_RAMP_STEPS = 220
 
 STROKES_PER_WIPE = 2
 MOVE_DISTANCE = 0.25
@@ -377,8 +439,18 @@ def local_to_world(base_pos, base_quat, p_local):
     return base_pos + quat_to_matrix(base_quat) @ np.asarray(p_local)
 
 
-def aim_link6_world(base_pos, base_quat, ori_quat, z):
-    world_offset = quat_to_matrix(ori_quat) @ np.array([0.0, 0.0, NOZZLE_OFFSET])
+def aim_orientation_world(base_quat):
+    """[15_ 이식] spray_orientation_quat() 을 "챠시 로컬 기준 조준방향"으로 재해석해 현재
+    base_quat 로 합성(position 과 동일하게 챠시 프레임을 통째로 회전)한 진짜 월드 orientation 반환.
+    carter1 은 항상 스폰 yaw 근처에서만 스윕하지만, 웨이포인트 도착 yaw 오차를 흡수하도록 15_ 방식 채택."""
+    R_world = quat_to_matrix(base_quat) @ quat_to_matrix(spray_orientation_quat())
+    return matrix_to_quat_wxyz(R_world)
+
+
+def aim_link6_world_from_offset(base_pos, base_quat, ori_quat, z, tip_offset_link6_frame):
+    """[15_ 이식] carter1 의 스칼라 Z 오프셋(NOZZLE_OFFSET) 방식을 3축 벡터로 일반화. tip_offset_
+    link6_frame = 파지 직후 실측한 link_6 기준 노즐팁 상대위치(3축, ctx.nozzle_tip_offset)."""
+    world_offset = quat_to_matrix(ori_quat) @ np.asarray(tip_offset_link6_frame)
     return local_to_world(base_pos, base_quat, [WALL_X, AIM_Y, z]) - world_offset
 
 
@@ -391,6 +463,16 @@ def read_world_pose(prim_path):
     pos = np.array([tr[0], tr[1], tr[2]])
     quat = np.array([q.GetReal(), q.GetImaginary()[0], q.GetImaginary()[1], q.GetImaginary()[2]])
     return pos, quat
+
+
+def relative_pose(parent_path, child_path):
+    """[15_ 이식] child 를 parent 프레임에서 본 (상대위치 np3, 상대회전행렬 3x3)."""
+    p_pos, p_quat = read_world_pose(parent_path)
+    c_pos, c_quat = read_world_pose(child_path)
+    R_p = quat_to_matrix(p_quat)
+    rel_pos = R_p.T @ (c_pos - p_pos)
+    rel_R = R_p.T @ quat_to_matrix(c_quat)
+    return rel_pos, rel_R
 
 
 def wrap_pi(a):
@@ -515,62 +597,164 @@ def _place_xform(prim_path, x, y, z, yaw_deg):
 
 
 def build_carter1():
-    """carter1 = Nova Carter payload + m0609 노즐팔(fixed-joint 병합) @ /World/Carter1.
-    10_1 build_scene 를 스코프 경로로 이식."""
+    """[16번] carter1 = move_tash_can.usd(Nova + Surface Gripper 팔 + 쓰레기통, 이미 병합) 전체를
+    /World/Carter1 스코프로 참조(carter2 와 동일 에셋 → 검증된 그리퍼 팔 재사용). 단,
+    (a) 폐기물 안 하므로 내장 쓰레기통 prim 비활성화, (b) Nova 를 carter1 홈(18.5,0)으로 재배치,
+    (c) 스폰 근처 노즐 거치대에서 그리퍼로 노즐을 툴체인지한다(build_nozzle_dock).
+    build_carter2 와 대칭 구조 — 유일 차이는 홈 좌표 + 쓰레기통 비활성화."""
     stage = omni.usd.get_context().get_stage()
-    UsdGeom.Xform.Define(stage, C1_SCOPE)
-
-    # (1) Nova Carter payload
-    carter_prim = stage.DefinePrim(C1_CARTER_PRIM, "Xform")
-    carter_prim.GetPayloads().AddPayload(CARTER_URL)
-    for _ in range(120):
+    scope = stage.DefinePrim(C1_SCOPE, "Xform")
+    # identity 보장(참조된 /World 의 상대기하가 스코프 xform 으로 흔들리지 않게 — 재배치는 Nova prim 에서)
+    UsdGeom.Xformable(scope).ClearXformOpOrder()
+    scope.GetReferences().AddReference(Sdf.Reference(assetPath=MOVE_TRASH_USD, primPath="/World"))
+    for _ in range(80):
         simulation_app.update()
+
+    if not stage.GetPrimAtPath(C1_ARTICULATION_ROOT).IsValid():
+        print(f"[FATAL] {C1_ARTICULATION_ROOT} 없음 — carter1 로드 실패"); return False
+
+    # 중복 PhysicsScene 비활성화(환경/World 기본과 충돌 방지) — build_carter2 와 동일.
+    extra = stage.GetPrimAtPath(C1_EXTRA_PHYSICS)
+    if extra.IsValid():
+        extra.SetActive(False)
+        print(f"[SCENE] {C1_EXTRA_PHYSICS} 비활성화(중복 PhysicsScene)")
+
+    # carter1 은 폐기물 안 함 → 내장 쓰레기통 prim 비활성화(씬에서 감춤 + 물리 제외).
+    trash = stage.GetPrimAtPath(C1_TRASH_CAN_PRIM)
+    if trash.IsValid():
+        trash.SetActive(False)
+        print(f"[SCENE] {C1_TRASH_CAN_PRIM} 비활성화(carter1 은 폐기물 미수행)")
+
+    # ★carter1 홈 재배치★ : move_tash_can 은 Nova 를 carter2 홈(16.66,0)에 authoring 했으므로,
+    #   Nova prim 을 carter1 홈(18.5,0)으로 override 배치한다(Play 전 authoring). 팔은 별도 사전배치
+    #   후 Play 시 articulation FK 가 이 챠시 위로 스냅한다(build_carter2 의 팔 사전배치와 동일 원리).
     _place_xform(C1_CARTER_PRIM, C1_START_POSE["x"], C1_START_POSE["y"],
                  C1_START_POSE["z"], C1_START_POSE["yaw_deg"])
     simulation_app.update()
 
-    chassis = stage.GetPrimAtPath(C1_CHASSIS)
-    if not chassis.IsValid():
-        print(f"[FATAL] {C1_CHASSIS} 없음 — carter1 로드 실패"); return False
-    _wp = Gf.Transform(UsdGeom.Xformable(chassis)
-                       .ComputeLocalToWorldTransform(Usd.TimeCode.Default())).GetTranslation()
-    print(f"[SPAWN] c1 chassis world = ({_wp[0]:.3f}, {_wp[1]:.3f}, {_wp[2]:.3f}) "
-          f"(목표 {C1_START_POSE['x']},{C1_START_POSE['y']})")
-    UsdPhysics.MassAPI.Apply(chassis).CreateMassAttr(CHASSIS_MASS)
-
-    # (2) 노즐 팔 : m0609_with_nozzle 내부 /World/m0609 를 C1_ARM 으로 타겟 참조(스코프 오염 방지)
-    arm_prim = stage.DefinePrim(C1_ARM, "Xform")
-    arm_prim.GetReferences().AddReference(Sdf.Reference(assetPath=NOZZLE_USD, primPath="/World/m0609"))
-    for _ in range(20):
-        simulation_app.update()
-    if not stage.GetPrimAtPath(C1_ARM).IsValid():
-        print(f"[FATAL] {C1_ARM} 없음 — 노즐 팔 로드 실패"); return False
-    # chassis 위 정렬 배치 (arm_world = MOUNT_OFFSET × chassis_world)
+    chassis = stage.GetPrimAtPath(C1_ARTICULATION_ROOT)
     chassis_m = UsdGeom.Xformable(chassis).ComputeLocalToWorldTransform(Usd.TimeCode.Default())
-    arm_m = Gf.Matrix4d().SetTranslate(MOUNT_OFFSET) * chassis_m
-    xf = UsdGeom.Xformable(arm_prim)
-    xf.ClearXformOpOrder()
-    xf.AddTransformOp().Set(arm_m)
+    _wp = Gf.Transform(chassis_m).GetTranslation()
+    print(f"[SPAWN] c1 chassis world = ({_wp[0]:.3f}, {_wp[1]:.3f}, {_wp[2]:.3f}) "
+          f"(목표 {C1_START_POSE['x']:.2f},{C1_START_POSE['y']:.2f})")
 
-    # (3) 병합 : root_joint 를 world→chassis 로 재연결 + 팔 ArticulationRoot 제거
-    rj = stage.GetPrimAtPath(C1_ROOT_JOINT)
-    if not rj.IsValid():
-        print(f"[FATAL] {C1_ROOT_JOINT} 없음"); return False
-    rj.RemoveAppliedSchema("PhysicsArticulationRootAPI")
-    rj.RemoveAppliedSchema("PhysxArticulationAPI")
-    fj = UsdPhysics.FixedJoint(rj)
-    fj.CreateBody0Rel().SetTargets([Sdf.Path(C1_CHASSIS)])
-    fj.CreateLocalPos0Attr().Set(Gf.Vec3f(MOUNT_OFFSET))
-    fj.CreateLocalRot0Attr().Set(Gf.Quatf(1, 0, 0, 0))
-    fj.CreateLocalPos1Attr().Set(Gf.Vec3f(0, 0, 0))
-    fj.CreateLocalRot1Attr().Set(Gf.Quatf(1, 0, 0, 0))
-    fp = UsdPhysics.FilteredPairsAPI.Apply(stage.GetPrimAtPath(C1_BASE_LINK))
-    fp.CreateFilteredPairsRel().AddTarget(Sdf.Path(C1_CHASSIS))
+    # 팔 사전배치(가시성) — build_carter2 와 동일. Play 후 물리가 같은 위치로 확정하므로 정합.
+    arm1 = stage.GetPrimAtPath(C1_ARM_ROOT)
+    if arm1.IsValid():
+        arm1_m = Gf.Matrix4d().SetTranslate(MOUNT_OFFSET) * chassis_m
+        xf1 = UsdGeom.Xformable(arm1)
+        xf1.ClearXformOpOrder()
+        xf1.AddTransformOp().Set(arm1_m)
+        _awp = Gf.Transform(UsdGeom.Xformable(stage.GetPrimAtPath(f"{C1_ARM_ROOT}/base_link"))
+                            .ComputeLocalToWorldTransform(Usd.TimeCode.Default())).GetTranslation()
+        print(f"[SCENE] c1 팔 사전배치(Play 전 가시화) → base_link ({_awp[0]:.2f},{_awp[1]:.2f},{_awp[2]:.2f})")
+    else:
+        print(f"[SCENE][WARN] {C1_ARM_ROOT} 없음 — 팔 사전배치 스킵")
 
     set_carter_namespace(C1_CARTER_PRIM, NS_CARTER1)
     set_camera_resolution(C1_CARTER_PRIM, CAM_RENDER_W, CAM_RENDER_H)
-    print("[SCENE] carter1 (Nova + 노즐팔 병합) 완료")
+    print("[SCENE] carter1 (Nova + Surface Gripper 팔, 쓰레기통 비활성) 완료")
     return True
+
+
+# ── 노즐 거치대(NozzleDock) + Surface Gripper 셋업 (15_ 이식, carter1 전용) ──
+def build_nozzle_dock():
+    """[15_ 이식] m0609_with_nozzle.usd 의 nozzle_base_link 서브트리만 거치대 경로에 참조해 "수직
+    매달기"(TC_APPROACH_ORIENTATION=(0,1,0,0) → 로컬 Z가 world -Z)로 세우고, 임시 hold_joint(정적
+    anchor prim 에 FixedJoint)로 고정. carter1 이 파지 성공 직후 release_hold_joint() 로 비활성화."""
+    stage = omni.usd.get_context().get_stage()
+    UsdGeom.Xform.Define(stage, NOZZLE_DOCK_SCOPE)
+    tool_prim = stage.DefinePrim(NOZZLE_TOOL_PATH, "Xform")
+    tool_prim.GetReferences().AddReference(
+        Sdf.Reference(assetPath=NOZZLE_USD, primPath=NOZZLE_SOURCE_PRIMPATH))
+    for _ in range(20):
+        simulation_app.update()
+    if not stage.GetPrimAtPath(NOZZLE_TOOL_PATH).IsValid():
+        print(f"[FATAL] {NOZZLE_TOOL_PATH} 로드 실패"); return False
+
+    dock_quat = TC_APPROACH_ORIENTATION
+    rot = Gf.Rotation(Gf.Quatd(float(dock_quat[0]), Gf.Vec3d(*dock_quat[1:])))
+    m = Gf.Matrix4d().SetRotate(rot).SetTranslateOnly(
+        Gf.Vec3d(float(NOZZLE_DOCK_XY[0]), float(NOZZLE_DOCK_XY[1]), float(NOZZLE_DOCK_HEIGHT)))
+    xf = UsdGeom.Xformable(tool_prim)
+    xf.ClearXformOpOrder()
+    xf.AddTransformOp().Set(m)
+    print(f"[SPAWN] 노즐 거치대 = ({NOZZLE_DOCK_XY[0]:.3f},{NOZZLE_DOCK_XY[1]:.3f},{NOZZLE_DOCK_HEIGHT:.3f}) 수직 매달기")
+
+    # 임시 거치 조인트 : 정적 anchor prim 을 body0 로(15_ : body0 미지정 시 물리 폭발 확인).
+    anchor_prim = stage.DefinePrim(NOZZLE_HOLD_ANCHOR_PATH, "Xform")
+    anchor_xf = UsdGeom.Xformable(anchor_prim)
+    anchor_xf.ClearXformOpOrder()
+    anchor_xf.AddTransformOp().Set(m)
+
+    hold_joint = UsdPhysics.FixedJoint.Define(stage, NOZZLE_HOLD_JOINT_PATH)
+    hold_joint.CreateBody0Rel().SetTargets([NOZZLE_HOLD_ANCHOR_PATH])
+    hold_joint.CreateBody1Rel().SetTargets([NOZZLE_TOOL_PATH])
+    hold_joint.CreateLocalPos0Attr().Set(Gf.Vec3f(0.0, 0.0, 0.0))
+    hold_joint.CreateLocalRot0Attr().Set(Gf.Quatf(1.0, 0.0, 0.0, 0.0))
+    hold_joint.CreateLocalPos1Attr().Set(Gf.Vec3f(0.0, 0.0, 0.0))
+    hold_joint.CreateLocalRot1Attr().Set(Gf.Quatf(1.0, 0.0, 0.0, 0.0))
+    hold_joint.CreateExcludeFromArticulationAttr().Set(True)
+    hold_joint.CreateJointEnabledAttr().Set(True)
+    print(f"[SCENE] 임시 거치 조인트 authoring = {NOZZLE_HOLD_JOINT_PATH} (anchor={NOZZLE_HOLD_ANCHOR_PATH})")
+    return True
+
+
+def release_hold_joint(stage):
+    prim = stage.GetPrimAtPath(NOZZLE_HOLD_JOINT_PATH)
+    UsdPhysics.Joint(prim).GetJointEnabledAttr().Set(False)
+    print(f"[INFO] 임시 거치 조인트 비활성화 = {NOZZLE_HOLD_JOINT_PATH}")
+
+
+def engage_hold_joint(stage):
+    prim = stage.GetPrimAtPath(NOZZLE_HOLD_JOINT_PATH)
+    UsdPhysics.Joint(prim).GetJointEnabledAttr().Set(True)
+    print(f"[INFO] 임시 거치 조인트 재활성화 = {NOZZLE_HOLD_JOINT_PATH}")
+
+
+def setup_nozzle_surface_gripper(stage):
+    """[15_ 이식] carter1 그리퍼(move_tash_can 내장 mop_surface_gripper)의 기존 D6 조인트 속성만
+    2단계 검증값(CLEARANCE_OFFSET/GRIP_TRAVEL 등)으로 직접 재기록(새로 만들면 attachmentPoints 관계
+    깨질 위험)."""
+    joint_path = f"{C1_ARM}/{C1_EE_LINK_NAME}/mop_surface_gripper_joints/mop_attachment_joint"
+    gripper_prim = stage.GetPrimAtPath(C1_SURFACE_GRIPPER)
+    joint_prim = stage.GetPrimAtPath(joint_path)
+    if gripper_prim.IsValid() and joint_prim.IsValid():
+        gripper_prim.GetAttribute("isaac:maxGripDistance").Set(float(MAX_GRIP_DISTANCE))
+        joint_prim.GetAttribute("isaac:clearanceOffset").Set(float(CLEARANCE_OFFSET))
+        joint_prim.GetAttribute("limit:transZ:physics:high").Set(float(GRIP_TRAVEL))
+        joint_prim.GetAttribute("drive:transZ:physics:stiffness").Set(float(GRIP_DRIVE_STIFFNESS))
+        joint_prim.GetAttribute("drive:transZ:physics:damping").Set(float(GRIP_DRIVE_DAMPING))
+        print(f"[GRIPPER] {C1_SURFACE_GRIPPER} 기존 조인트 재튜닝 "
+              f"(clearance={CLEARANCE_OFFSET}, travel={GRIP_TRAVEL}, maxGripDistance={MAX_GRIP_DISTANCE})")
+        return C1_SURFACE_GRIPPER
+    print(f"[GRIPPER][WARN] {C1_SURFACE_GRIPPER} 또는 {joint_path} 없음 — 새로 authoring")
+    return surface_gripper_utils.setup_mop_surface_gripper(
+        stage, fingertip_prim_path=f"{C1_ARM}/{C1_EE_LINK_NAME}",
+        gripper_prim_path=C1_SURFACE_GRIPPER,
+        max_grip_distance=MAX_GRIP_DISTANCE, grip_drive_stiffness=GRIP_DRIVE_STIFFNESS,
+        grip_drive_damping=GRIP_DRIVE_DAMPING, clearance_offset=CLEARANCE_OFFSET, grip_travel=GRIP_TRAVEL)
+
+
+def build_carter1_control(my_world):
+    """carter1 SingleManipulator 를 scene 에 등록(world.reset 전) → (robot, ee_path, tool0_path)."""
+    stage = omni.usd.get_context().get_stage()
+    tune_arm_drives(C1_ARM)
+
+    def find_by_name(root, name):
+        for prim in Usd.PrimRange(stage.GetPrimAtPath(root)):
+            if prim.GetName() == name:
+                return str(prim.GetPath())
+        return None
+
+    ee_path = find_by_name(C1_ARM, C1_EE_LINK_NAME)
+    tool0_path = find_by_name(C1_ARM, "tool0")
+    if ee_path is None:
+        raise RuntimeError(f"c1 link_6 못 찾음 (ee={ee_path})")
+    robot = my_world.scene.add(SingleManipulator(
+        prim_path=C1_ARTICULATION_ROOT, name="carter1_m0609",
+        end_effector_prim_path=ee_path, gripper=None))
+    return robot, ee_path, tool0_path
 
 
 def build_carter2():
@@ -632,7 +816,8 @@ def build_carter2():
 
 
 # ════════════════════════════════════════════════════════════════════════════
-#  F. carter1 소독 FSM (10_1 while 몸통 → tick 상태머신) + SprayFX/Sweeper
+#  F. carter1 소독+툴체인지 제너레이터 (SprayFX/Sweeper + 15_ 툴체인지/스윕 이식)
+#     C1Ctx · 툴체인지(grasp/release) · 분사 스윕 · 최상위 미션(g_carter1_mission).
 # ════════════════════════════════════════════════════════════════════════════
 def _basis_from_z(d):
     d = d / (np.linalg.norm(d) + 1e-9)
@@ -686,6 +871,12 @@ class SprayFX:
         self._pts_attr.Set(Vt.Vec3fArray.FromNumpy(self.pos))
         self._w_attr.Set(Vt.FloatArray.FromNumpy(widths.astype(np.float32)))
 
+    def clear(self):
+        """[15_ 이식] g_spray_sweep 이 끝나면 update() 가 더 안 불려 마지막 파티클이 화면에 얼어붙는다
+        — 제너레이터 종료 시(완주/조기종료/grip풀림) 반드시 호출해 위젯을 0으로 밀어 즉시 지운다."""
+        self.age[:] = SPRAY_LIFETIME + 1.0
+        self._w_attr.Set(Vt.FloatArray.FromNumpy(np.zeros(self.N, dtype=np.float32)))
+
 
 class Sweeper:
     def __init__(self, lo, hi, cruise, accel, dt, hold_steps=6):
@@ -714,197 +905,318 @@ class Sweeper:
         return self.s
 
 
-class Carter1Spray:
-    """carter1 소독 로봇 상태머신. tick() 이 10_1 while 루프 몸통 1회(1 스텝)에 해당.
-    world.step 은 부르지 않는다(main 협조 루프가 담당). handoff 모드 전용."""
+class C1Ctx:
+    """carter1(소독+툴체인저) 제너레이터가 공유하는 핸들 묶음. 15_ 의 C2Ctx(툴체인지 필드 포함)를
+    carter1 경로/토픽에 맞춰 재구성한 것. arm_root/articulation_root 를 ctx 로 넘겨 15_ 의 툴체인지/
+    스윕 제너레이터를 로봇 비종속으로 재사용한다."""
+    def __init__(self, world, robot, dof_names, ee_path, tool0_path, gripper,
+                 ros_node, cmd_pub, sweep_done_pub, sweep_state):
+        self.world = world; self.robot = robot; self.dof_names = dof_names
+        self.ee_path = ee_path; self.tool0_path = tool0_path; self.gripper = gripper
+        self.ros_node = ros_node; self.cmd_pub = cmd_pub
+        self.sweep_done_pub = sweep_done_pub
+        self.sweep_state = sweep_state          # {"req": None|True|False} ← /carter1/start_sweep
+        self.arm_root = C1_ARM_ROOT             # 15_ 제너레이터의 base_link 조회 기준
+        self.articulation_root = C1_ARTICULATION_ROOT
+        self.stage = omni.usd.get_context().get_stage()
+        self.status = "시작 대기"
+        # 툴체인지 상태
+        self.tool_changer = None                # ToolChangerController, main() 에서 주입
+        self.holding_nozzle = False
+        self.nozzle_tip_offset = None           # link_6 기준 nozzle_tcp 상대위치(3축) — 파지 직후 실측
 
-    def __init__(self, my_world, ros_node):
-        self.world = my_world
-        stage = omni.usd.get_context().get_stage()
 
-        art_root = find_articulation_root(C1_CARTER_PRIM)
-        self.robot = SingleArticulation(prim_path=art_root, name="carter1_m0609")
-        self.robot.initialize()
-        dof = list(self.robot.dof_names)
-        self.arm_idx = np.array([dof.index(n) for n in ARM_JOINT_NAMES])
-        print(f"[ART] carter1 arm_idx={self.arm_idx.tolist()} (dof {len(dof)})")
+def build_carter1_toolchanger(stage, c1_ee_path):
+    """[15_ build_common_control 축약] carter1 은 트래시 Cartesian 이동이 없어 RMPflow 불필요 —
+    Surface Gripper + ToolChangerController 만 초기화. setup_nozzle_surface_gripper 는 씬 빌드 단계
+    (reset 이전)에서 이미 호출됐다고 가정."""
+    gripper = SurfaceGripper(end_effector_prim_path=c1_ee_path, surface_gripper_path=C1_SURFACE_GRIPPER)
+    gripper.initialize()
+    dock_quat = TC_APPROACH_ORIENTATION
+    tool_changer = ToolChangerController(
+        rg2_fingertip_prim_path=c1_ee_path,
+        mop_handle_prim_path=NOZZLE_TOOL_PATH,
+        stand_position=np.array([NOZZLE_DOCK_XY[0], NOZZLE_DOCK_XY[1], NOZZLE_DOCK_HEIGHT]),
+        stand_orientation=dock_quat,
+        approach_orientation=dock_quat,
+        fingertip_offset_from_ik_frame=TC_FINGERTIP_OFFSET_FROM_TOOL0,
+        rg2_gripper=None,
+        surface_gripper_prim_path=C1_SURFACE_GRIPPER,
+        auto_create_surface_gripper=False,
+    )
+    tool_changer.initialize()
+    return gripper, tool_changer
 
-        # aim IK (하단/상단)
-        base_pos, base_quat = read_world_pose(C1_BASE_LINK)
-        ori = spray_orientation_quat()
-        ik = mg.LulaKinematicsSolver(robot_description_path=C1_DESC, urdf_path=C1_URDF)
-        ik.set_robot_base_pose(base_pos, base_quat)
-        q_low, ok_lo = ik.compute_inverse_kinematics(
-            EE_FRAME, aim_link6_world(base_pos, base_quat, ori, Z_LOW), ori,
-            position_tolerance=0.005, orientation_tolerance=0.05)
-        q_high, ok_hi = ik.compute_inverse_kinematics(
-            EE_FRAME, aim_link6_world(base_pos, base_quat, ori, Z_HIGH), ori,
-            warm_start=(q_low if ok_lo else None),
-            position_tolerance=0.005, orientation_tolerance=0.05)
-        if not (ok_lo and ok_hi):
-            raise RuntimeError(f"carter1 aim IK 실패 (low={ok_lo}, high={ok_hi})")
-        q_low = np.asarray(q_low[:6]); q_high = np.asarray(q_high[:6])
-        self.q_mid = 0.5 * (q_low + q_high); self.q_half = 0.5 * (q_high - q_low)
 
-        self.q_stow = STOW_Q.copy()
-        self.robot.set_joint_positions(self.q_stow, joint_indices=self.arm_idx)
-        self.q_applied = self.q_stow.copy()
-        self.sweeper = Sweeper(-1.0, 1.0, S_CRUISE, S_ACCEL, PHYSICS_DT, S_HOLD_STEPS)
-        self.q_hold = self.q_of_s(-1.0)
-        self.spray_fx = SprayFX(stage) if SPRAY_FX_ON else None
+def _tc_solve_and_ramp(ctx, ik, target_pos, target_ori, warm_start, ramp_steps, label,
+                       bias_compensation=None):
+    """[15_ 이식] 거치대는 고정 위치라 반응형 IK(RMPflow) 대신 "IK 1회 풀어 관절각 확정 → 램프".
+    position_tolerance=0.001 + TC_TARGET_BIAS_COMPENSATION(URDF-USD 형상 불일치 고정 바이어스 보정).
+    반환 = (관절각 rad 6dof|None, ok)."""
+    bias = bias_compensation if bias_compensation is not None else TC_TARGET_BIAS_COMPENSATION
+    corrected_target = np.asarray(target_pos) - bias
+    q, ok = ik.compute_inverse_kinematics(
+        EE_FRAME, corrected_target, target_ori,
+        warm_start=warm_start, position_tolerance=0.001, orientation_tolerance=0.02)
+    if not ok:
+        print(f"[TOOLCHANGE][WARN] {label} IK 실패")
+        return None, False
+    q6 = np.asarray(q[:6])
+    yield from g_ramp_to_joint_positions(ctx, np.degrees(q6), ramp_steps)
+    actual_pos = get_prim_world_position(ctx.ee_path)
+    actual_err = actual_pos - np.asarray(target_pos)
+    print(f"[TOOLCHANGE] {label} 관절이동 완료 q={np.round(q6, 3)} "
+          f"(link_6 오차 |e|={np.linalg.norm(actual_err) * 1000:.2f}mm)")
+    return q6, True
 
-        # ROS
-        self.clock_state = {}
-        self.handoff = {"req": None}
-        ros_node.create_subscription(Bool, C1_START_SWEEP,
-                                     lambda m: self.handoff.__setitem__("req", bool(m.data)), 10)
-        self.sweep_done_pub = ros_node.create_publisher(Bool, C1_SWEEP_DONE, 10)
-        self.cmd_pub = ros_node.create_publisher(Twist, C1_CMD_VEL, 10)
 
-        # 상태
-        self.arm_ready = False
-        self.sweep_run = False
-        self.phase = "WIPE"
-        self.heading_ready = False; self.reached = False
-        self.global_start = None; self.forward0 = None; self.target_yaw = 0.0
-        self.prev_yaw = None        # yaw_rate(미분 댐핑) 계산용 — 매 tick 갱신
-        self.progress = 0.0; self.move_start_prog = 0.0; self.cycle = 0
-        self.done_ticks = 0
-        self.drive_vx = 0.0
-        print(f"[ROS] carter1 handoff : sub {C1_START_SWEEP}, pub {C1_SWEEP_DONE} + {C1_CMD_VEL}")
+def g_tool_change_grasp(ctx):
+    """[15_ 이식] 거치대에서 노즐 파지. 성공 시 ctx.holding_nozzle=True, ctx.nozzle_tip_offset 갱신.
+    파지 실패/IK 실패 시 상공 안전자세로 복귀 후 False 반환(폐기물 grasp 재시도 패턴과 동일 — 실패해도
+    최상위 루프가 죽지 않게)."""
+    tc = ctx.tool_changer
+    handle_position, handle_orientation = tc.approach_tool_stand()
+    base_pos, base_quat = read_world_pose(f"{ctx.arm_root}/base_link")
+    ik = mg.LulaKinematicsSolver(robot_description_path=IK_DESCRIPTION_PATH, urdf_path=IK_URDF_PATH)
+    ik.set_robot_base_pose(base_pos, base_quat)
 
-    def status(self):
-        if not self.arm_ready:
-            return "초기화 대기(Play 필요)"
-        if not self.sweep_run:
-            return "STANDBY: Nav2 이동 대기(/carter1/start_sweep 기다림)"
-        if self.reached:
-            return "스윕 완료 → /carter1/sweep_done"
-        return f"SWEEP {self.phase} (cycle {self.cycle}, progress {self.progress:.1f}/{FORWARD_DISTANCE:.0f}m)"
+    q_above, ok_above = yield from _tc_solve_and_ramp(
+        ctx, ik, handle_position + TC_EE_OFFSET, handle_orientation, None, TC_JOINT_RAMP_STEPS, "노즐 상공 접근")
+    if not ok_above:
+        return False
+    q_grasp, ok_grasp = yield from _tc_solve_and_ramp(
+        ctx, ik, handle_position + TC_GRASP_CLEARANCE, handle_orientation, q_above, TC_JOINT_RAMP_STEPS, "노즐 하강")
+    if not ok_grasp:
+        yield from g_ramp_to_joint_positions(ctx, np.degrees(q_above), TC_JOINT_RAMP_STEPS)
+        return False
 
-    def q_of_s(self, s):
-        q = self.q_mid + self.q_half * s
+    tc.grasp_mop()
+    for _ in range(TC_GRASP_SETTLE_STEPS):
+        yield
+    if not tc.surface_gripper.is_closed():
+        print("[TOOLCHANGE][FAIL] 노즐 파지 실패")
+        yield from g_ramp_to_joint_positions(ctx, np.degrees(q_above), TC_JOINT_RAMP_STEPS)
+        return False
+
+    release_hold_joint(ctx.stage)
+    for _ in range(10):
+        yield
+
+    rel_pos, _ = relative_pose(ctx.ee_path, NOZZLE_TCP_PATH)
+    ctx.nozzle_tip_offset = rel_pos
+    base_offset = get_prim_world_position(NOZZLE_TOOL_PATH) - get_prim_world_position(ctx.ee_path)
+    tc.fingertip_offset_from_ik_frame = base_offset
+    ctx.holding_nozzle = True
+    print(f"[TOOLCHANGE] 노즐 파지 성공. link_6 기준 tcp 오프셋={np.round(rel_pos, 4)} "
+          f"(|rel|={np.linalg.norm(rel_pos):.4f})")
+    yield from g_ramp_to_joint_positions(ctx, np.degrees(q_above), TC_JOINT_RAMP_STEPS)
+    return True
+
+
+def g_tool_change_release(ctx):
+    """[15_ 이식] 노즐을 거치대에 반납(현재 기본 미션 경로엔 미배선 — 반납하려면 마지막에 거치대
+    복귀 웨이포인트 + 별도 트리거 필요. 확장용으로 유지). 성공 시 ctx.holding_nozzle=False, hold_joint
+    재체결, fingertip_offset 리셋."""
+    tc = ctx.tool_changer
+    yield from g_ramp_to_joint_positions(ctx, np.degrees(STOW_Q), SPRAY_ENTRY_RAMP_STEPS)
+    stand_position, stand_orientation = tc.stand_return_target()
+    base_pos, base_quat = read_world_pose(f"{ctx.arm_root}/base_link")
+    ik = mg.LulaKinematicsSolver(robot_description_path=IK_DESCRIPTION_PATH, urdf_path=IK_URDF_PATH)
+    ik.set_robot_base_pose(base_pos, base_quat)
+
+    q_above, ok_above = yield from _tc_solve_and_ramp(
+        ctx, ik, stand_position + TC_EE_OFFSET, stand_orientation, None, TC_JOINT_RAMP_STEPS, "거치대 상공 복귀")
+    if not ok_above:
+        return False
+    q_down, ok_down = yield from _tc_solve_and_ramp(
+        ctx, ik, stand_position + TC_GRASP_CLEARANCE, stand_orientation, q_above, TC_JOINT_RAMP_STEPS, "거치대 하강")
+    if not ok_down:
+        yield from g_ramp_to_joint_positions(ctx, np.degrees(q_above), TC_JOINT_RAMP_STEPS)
+        return False
+
+    tc.release_mop_to_stand()
+    for _ in range(15):
+        yield
+    release_ok = not tc.surface_gripper.is_closed()
+    engage_hold_joint(ctx.stage)
+    for _ in range(TC_REDOCK_SETTLE_STEPS):
+        yield
+    ctx.holding_nozzle = False
+    ctx.nozzle_tip_offset = None
+    tc.fingertip_offset_from_ik_frame = TC_FINGERTIP_OFFSET_FROM_TOOL0.copy()
+    print(f"[TOOLCHANGE] 노즐 반납 {'성공' if release_ok else '실패'} + 재도킹 완료")
+    yield from g_ramp_to_joint_positions(ctx, np.degrees(q_above), TC_JOINT_RAMP_STEPS)
+    return release_ok
+
+
+def g_spray_sweep(ctx, forward_distance=FORWARD_DISTANCE, max_steps=None):
+    """[15_ 이식] WIPE(정지+상하 스윕)↔MOVE(팔 고정+전진, heading-hold) 반복. 사전조건:
+    ctx.holding_nozzle=True, ctx.nozzle_tip_offset 실측 완료. 조준 IK 오프셋은 파지 직후 실측치 사용.
+    반환 = True(목표 거리 도달) / False(조기종료·조준IK실패·grip풀림)."""
+    if not ctx.holding_nozzle or ctx.nozzle_tip_offset is None:
+        print("[SPRAY][FAIL] 노즐 파지 상태에서만 호출 가능(holding=False) — 중단")
+        return False
+
+    stage = ctx.stage
+    base_pos, base_quat = read_world_pose(f"{ctx.arm_root}/base_link")
+    ori = aim_orientation_world(base_quat)
+    ik = mg.LulaKinematicsSolver(robot_description_path=IK_DESCRIPTION_PATH, urdf_path=IK_URDF_PATH)
+    ik.set_robot_base_pose(base_pos, base_quat)
+    q_low, ok_lo = ik.compute_inverse_kinematics(
+        EE_FRAME, aim_link6_world_from_offset(base_pos, base_quat, ori, Z_LOW, ctx.nozzle_tip_offset), ori,
+        position_tolerance=0.005, orientation_tolerance=0.05)
+    q_high, ok_hi = ik.compute_inverse_kinematics(
+        EE_FRAME, aim_link6_world_from_offset(base_pos, base_quat, ori, Z_HIGH, ctx.nozzle_tip_offset), ori,
+        warm_start=(q_low if ok_lo else None),
+        position_tolerance=0.005, orientation_tolerance=0.05)
+    print(f"[SPRAY] 조준 IK q_low ok={ok_lo} q_high ok={ok_hi}")
+    if not (ok_lo and ok_hi):
+        print(f"[SPRAY][FAIL] 조준 IK 실패 (low={ok_lo}, high={ok_hi}) — 이 웨이포인트 스윕 불가")
+        return False
+    q_low = np.asarray(q_low[:6]); q_high = np.asarray(q_high[:6])
+    q_mid = 0.5 * (q_low + q_high); q_half = 0.5 * (q_high - q_low)
+
+    def q_of_s(s):
+        q = q_mid + q_half * s
         q[J5_INDEX] += J5_FLICK * s
         q[J1_INDEX] += J1_OFFSET
         return q
 
-    def publish_cmd(self, vx, wz=0.0):
+    arm_idx = np.array([ctx.dof_names.index(n) for n in ARM_JOINT_NAMES])
+    q_low_deg = np.degrees(q_of_s(-1.0))
+    print(f"[SPRAY] 스윕 자세로 진입(부드럽게, {SPRAY_ENTRY_RAMP_STEPS}스텝)")
+    yield from g_ramp_to_joint_positions(ctx, q_low_deg, SPRAY_ENTRY_RAMP_STEPS)
+
+    q_applied = q_of_s(-1.0).copy()
+    sweeper = Sweeper(-1.0, 1.0, S_CRUISE, S_ACCEL, PHYSICS_DT, S_HOLD_STEPS)
+    q_hold = q_of_s(-1.0)
+    spray_fx = SprayFX(stage) if SPRAY_FX_ON else None
+
+    def apply(q_target):
+        nonlocal q_applied
+        q_applied = q_applied + np.clip(q_target - q_applied, -MAX_JOINT_STEP, MAX_JOINT_STEP)
+        ctx.robot.apply_action(ArticulationAction(joint_positions=q_applied, joint_indices=arm_idx))
+
+    def publish_cmd(vx, wz, state):
         dv = FORWARD_ACCEL * PHYSICS_DT
-        v = self.drive_vx + float(np.clip(float(vx) - self.drive_vx, -dv, dv))
-        self.drive_vx = v
-        tw = Twist(); tw.linear.x = v; tw.angular.z = float(wz); self.cmd_pub.publish(tw)
+        v = state["vx"] + float(np.clip(float(vx) - state["vx"], -dv, dv))
+        state["vx"] = v
+        tw = Twist(); tw.linear.x = v; tw.angular.z = float(wz); ctx.cmd_pub.publish(tw)
 
-    def _apply(self, q_target):
-        self.q_applied = self.q_applied + np.clip(q_target - self.q_applied, -MAX_JOINT_STEP, MAX_JOINT_STEP)
-        self.robot.apply_action(ArticulationAction(joint_positions=self.q_applied, joint_indices=self.arm_idx))
+    phase = "WIPE"; heading_ready = False
+    global_start = None; forward0 = None; target_yaw = 0.0; prev_yaw = None
+    progress = 0.0; move_start_prog = 0.0; cycle = 0
+    drive_state = {"vx": 0.0}
+    step_i = 0
 
-    def on_stopped(self):
-        """Play 정지 감지 → 다음 Play 시 재초기화."""
-        self.arm_ready = False
+    while True:
+        step_i += 1
+        if max_steps is not None and step_i > max_steps:
+            publish_cmd(0.0, 0.0, drive_state)
+            if spray_fx is not None:
+                spray_fx.clear()
+            print(f"[SPRAY] max_steps({max_steps}) 도달 → 조기 종료(디버그)")
+            return False
 
-    def tick(self):
-        """1 물리 스텝치 carter1 제어. main 루프가 이미 world.step 을 한 상태로 호출."""
-        # Stop→Play 후 physics 뷰 재생성 → articulation 재초기화(6-11)
-        if not self.arm_ready:
-            try:
-                self.robot.initialize()
-                self.robot.set_joint_positions(self.q_stow, joint_indices=self.arm_idx)
-            except Exception:
-                return
-            self.q_applied = self.q_stow.copy()
-            self.sweeper.reset_bottom()
-            self.phase = "WIPE"; self.heading_ready = False; self.reached = False; self.cycle = 0
-            self.sweep_run = False; self.handoff["req"] = None; self.done_ticks = 0
-            self.arm_ready = True
-            print("[SIM] carter1 Play 감지 → articulation 초기화")
+        if not (ctx.gripper.is_closed() if ctx.gripper else True):
+            publish_cmd(0.0, 0.0, drive_state)
+            if spray_fx is not None:
+                spray_fx.clear()
+            print("[SPRAY][WARN] 스윕 중 grip 이 풀림 감지 — 중단")
+            ctx.holding_nozzle = False
+            return False
 
-        # 분사 FX (방출은 WIPE 구간, 적분 항상)
-        if self.spray_fx is not None:
-            spraying = self.sweep_run and self.phase == "WIPE"
+        chassis_pos, chassis_quat = read_world_pose(ctx.articulation_root)
+        chassis_R = quat_to_matrix(chassis_quat)
+        fwd_now = chassis_R @ np.array([1.0, 0.0, 0.0])
+        yaw_now = float(np.arctan2(fwd_now[1], fwd_now[0]))
+        if prev_yaw is None:
+            prev_yaw = yaw_now
+        yaw_rate = wrap_pi(yaw_now - prev_yaw) / PHYSICS_DT
+        prev_yaw = yaw_now
+
+        if not heading_ready:
+            global_start = chassis_pos.copy()
+            raw_yaw = yaw_now
+            snapped_yaw = round(raw_yaw / (np.pi / 2.0)) * (np.pi / 2.0)
+            target_yaw = float(snapped_yaw)
+            forward0 = np.array([np.cos(snapped_yaw), np.sin(snapped_yaw), 0.0])
+            heading_ready = True
+            print(f"[SPRAY][PHASE] WIPE 시작 (도착yaw={np.degrees(raw_yaw):.1f} → world축 스냅 {np.degrees(snapped_yaw):.0f})")
+
+        progress = float(np.dot(chassis_pos - global_start, forward0))
+        if progress >= forward_distance:
+            publish_cmd(0.0, 0.0, drive_state)
+            if spray_fx is not None:
+                spray_fx.clear()
+            print(f"[SPRAY] {forward_distance:.1f}m 도달(progress={progress:.2f}) → 스윕 종료")
+            return True
+
+        if spray_fx is not None:
+            spraying = phase == "WIPE"
             if spraying:
-                n_pos, n_quat = read_world_pose(C1_NOZZLE_BASE)
+                n_pos, n_quat = read_world_pose(NOZZLE_TCP_PATH)
                 Rn = quat_to_matrix(n_quat)
                 s_dir = Rn @ np.array([0.0, 0.0, 1.0])
-                s_org = n_pos + Rn @ np.array([0.0, 0.0, NOZZLE_TIP_LOCAL])
-                self.spray_fx.update(True, s_org, s_dir, PHYSICS_DT)
+                spray_fx.update(True, n_pos, s_dir, PHYSICS_DT)
             else:
-                self.spray_fx.update(False, None, None, PHYSICS_DT)
+                spray_fx.update(False, None, None, PHYSICS_DT)
 
-        # STANDBY (Nav2 가 스윕 시작점으로 이동 중)
-        if not self.sweep_run:
-            if self.done_ticks > 0:
-                self.sweep_done_pub.publish(Bool(data=True)); self.done_ticks -= 1
-            if self.handoff["req"] is True:
-                self.handoff["req"] = None
-                self.sweep_run = True; self.phase = "WIPE"; self.heading_ready = False
-                self.reached = False; self.cycle = 0; self.done_ticks = 0
-                self.sweeper.reset_bottom()
-                print("[HANDOFF] c1 /start_sweep=True → 스윕 시작")
-                # fall-through to sweep
-            else:
-                if self.handoff["req"] is False:
-                    self.handoff["req"] = None
-                self._apply(self.q_stow)
-                return
-
-        # 취소요청
-        if self.handoff["req"] is False:
-            self.handoff["req"] = None
-            self.publish_cmd(0.0); self.sweep_run = False
-            print("[HANDOFF] c1 /start_sweep=False → 스윕 취소 → STANDBY")
-            return
-
-        chassis_pos, chassis_quat = read_world_pose(C1_CHASSIS)
-        chassis_R = quat_to_matrix(chassis_quat)
-        # 현재 yaw + yaw_rate(미분 댐핑용). WIPE 중에도 매 tick 갱신해 MOVE 진입 시 rate 가 신선하게 유지.
-        _fwd_now = chassis_R @ np.array([1.0, 0.0, 0.0])
-        yaw_now = float(np.arctan2(_fwd_now[1], _fwd_now[0]))
-        if self.prev_yaw is None:
-            self.prev_yaw = yaw_now
-        yaw_rate = wrap_pi(yaw_now - self.prev_yaw) / PHYSICS_DT
-        self.prev_yaw = yaw_now
-        if not self.heading_ready:
-            self.global_start = chassis_pos.copy()
-            # [world 축 스냅] 스윕 기준을 '도착 헤딩'이 아니라 world 좌표축(가장 가까운 90° 배수)으로 삼는다.
-            # Nav2 가 WP yaw(+90/-90 등)에 살짝 못 미쳐 도착해도(도착각 오차), 스윕 전체가 그 오차만큼
-            # 기울어 대각선이 되던 문제 해결 → world +y/-y 정축을 따라 직진. 보정(heading/lateral)도 이 축 기준.
-            raw_yaw = float(np.arctan2(_fwd_now[1], _fwd_now[0]))
-            snapped_yaw = round(raw_yaw / (np.pi / 2.0)) * (np.pi / 2.0)
-            self.target_yaw = float(snapped_yaw)
-            self.forward0 = np.array([np.cos(snapped_yaw), np.sin(snapped_yaw), 0.0])
-            self.heading_ready = True
-            print(f"[PHASE] c1 WIPE 시작 (도착yaw={np.degrees(raw_yaw):.1f}° → world축 스냅 {np.degrees(snapped_yaw):.0f}°)")
-
-        self.progress = float(np.dot(chassis_pos - self.global_start, self.forward0))
-        if not self.reached and self.progress >= FORWARD_DISTANCE:
-            self.reached = True
-            print(f"[INFO] c1 {FORWARD_DISTANCE:.1f} m 도달(progress={self.progress:.2f})")
-        if self.reached:
-            self.publish_cmd(0.0)
-            self.sweep_done_pub.publish(Bool(data=True))
-            self.sweep_run = False; self.done_ticks = 30
-            print("[HANDOFF] c1 스윕 완료 → /sweep_done → STANDBY")
-            return
-
-        if self.phase == "WIPE":
-            self.publish_cmd(0.0)
-            q_target = self.q_of_s(self.sweeper.step())
-            if self.sweeper.strokes >= STROKES_PER_WIPE:
-                self.phase = "MOVE"; self.move_start_prog = self.progress; self.cycle += 1
-                print(f"[{self.cycle}] c1 WIPE→MOVE")
+        if phase == "WIPE":
+            publish_cmd(0.0, 0.0, drive_state)
+            q_target = q_of_s(sweeper.step())
+            if sweeper.strokes >= STROKES_PER_WIPE:
+                phase = "MOVE"; move_start_prog = progress; cycle += 1
+                print(f"[SPRAY][{cycle}] WIPE→MOVE")
         else:
-            q_target = self.q_hold
-            yaw_err = wrap_pi(yaw_now - self.target_yaw)
-            left = np.array([-self.forward0[1], self.forward0[0], 0.0])
-            lateral = float(np.dot(chassis_pos - self.global_start, left))
-            # heading(P) + 좌우이탈(P) + yaw_rate(D 댐핑) → 캐스터 대각선 드리프트 억제
+            q_target = q_hold
+            yaw_err = wrap_pi(yaw_now - target_yaw)
+            left = np.array([-forward0[1], forward0[0], 0.0])
+            lateral = float(np.dot(chassis_pos - global_start, left))
             w = float(np.clip(-(KP_YAW * yaw_err + KP_LAT * lateral + KD_YAW * yaw_rate), -W_MAX, W_MAX))
-            self.publish_cmd(FORWARD_SPEED, w)
-            if (self.progress - self.move_start_prog) >= MOVE_DISTANCE:
-                self.publish_cmd(0.0)
-                self.phase = "WIPE"; self.sweeper.reset_bottom()
-                print(f"[{self.cycle}] c1 MOVE→WIPE (progress={self.progress:.2f})")
-        self._apply(q_target)
+            publish_cmd(FORWARD_SPEED, w, drive_state)
+            if (progress - move_start_prog) >= MOVE_DISTANCE:
+                publish_cmd(0.0, 0.0, drive_state)
+                phase = "WIPE"; sweeper.reset_bottom()
+                print(f"[SPRAY][{cycle}] MOVE→WIPE (progress={progress:.2f})")
+        apply(q_target)
+        yield
+
+
+def g_carter1_mission(ctx):
+    """[16번 신규] carter1 최상위 소독 미션 — spray_waypoint_mission 의 /carter1/start_sweep ↔
+    /carter1/sweep_done 핸드오프(13_ 계약 그대로)에 ★툴체인지 단계만 확장★ :
+      · 첫 start_sweep(거치대 웨이포인트 도착) → g_tool_change_grasp (노즐 파지)
+      · 이후 start_sweep(벽면 웨이포인트) → g_spray_sweep (기존 소독 스윕)
+    각 단계 완료 후 /carter1/sweep_done=True 를 ~30스텝 발행해 미션노드가 다음 웨이포인트로 진행.
+    ※ 노즐 반납(g_tool_change_release)은 현재 미배선 — 반납하려면 마지막 거치대 복귀 웨이포인트 +
+      별도 트리거 필요(확장). 단일 미션 실행 동안 노즐은 계속 장착 상태로 유지."""
+    ctx.status = "STANDBY: /carter1/start_sweep 대기"
+    while True:
+        # start_sweep=True 상승엣지 대기 (False/reset 은 흘려보냄)
+        while ctx.sweep_state.get("req") is not True:
+            if ctx.sweep_state.get("req") is False:
+                ctx.sweep_state["req"] = None
+            ctx.status = f"STANDBY: /carter1/start_sweep 대기 (노즐장착={ctx.holding_nozzle})"
+            yield
+        ctx.sweep_state["req"] = None
+
+        if not ctx.holding_nozzle:
+            ctx.status = "노즐 장착 중(툴체인지)"
+            print("[C1][HANDOFF] 첫 start_sweep → 노즐 툴체인지 시작")
+            ok = yield from g_tool_change_grasp(ctx)
+            print(f"[C1] 노즐 파지 {'성공' if ok else '실패'}")
+        else:
+            ctx.status = "소독 분사 스윕"
+            print("[C1][HANDOFF] start_sweep → 소독 스윕 시작")
+            yield from g_spray_sweep(ctx)
+
+        # 완료 통지 : /carter1/sweep_done=True 를 ~30스텝 반복 발행(13_ done_ticks 패턴)
+        ctx.status = "단계 완료 → /carter1/sweep_done"
+        for _ in range(30):
+            ctx.sweep_done_pub.publish(Bool(data=True))
+            yield
+        ctx.status = "STANDBY: /carter1/start_sweep 대기"
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -1334,16 +1646,22 @@ def main():
     print(f"[CFG] ENABLE_C1={en_c1} ENABLE_C2={en_c2}")
 
     my_world = World(stage_units_in_meters=1.0, physics_dt=PHYSICS_DT, rendering_dt=PHYSICS_DT)
+    stage = omni.usd.get_context().get_stage()
 
     build_env()
     if en_c1 and not build_carter1():
         simulation_app.close(); return
+    if en_c1 and not build_nozzle_dock():
+        simulation_app.close(); return
     if en_c2 and not build_carter2():
         simulation_app.close(); return
 
+    c1_robot = c1_ee_path = c1_tool0_path = None
     if en_c1:
-        tune_arm_drives(C1_ARM)
+        setup_nozzle_surface_gripper(stage)      # 그리퍼 D6 조인트 재튜닝(reset 전 authoring)
         boost_drive_limits(C1_CARTER_PRIM)
+        # carter1 제어체 추가(reset 전에 scene.add 필요) — 내부에서 tune_arm_drives(C1_ARM) 수행
+        c1_robot, c1_ee_path, c1_tool0_path = build_carter1_control(my_world)
     c2_robot = c2_ee_path = c2_tool0_path = None
     if en_c2:
         boost_drive_limits(f"{C2_SCOPE}/Nova_Carter_ROS")
@@ -1356,18 +1674,41 @@ def main():
 
     # ── ROS ──
     rclpy.init()
-    ros_node = rclpy.create_node("multi_robot_integrated_controller")
+    ros_node = rclpy.create_node("dual_sg_tool_changer_controller")
     clock_pub = ros_node.create_publisher(Clock, "/clock", 10)     # 전역 단일 /clock
 
-    c1 = None
+    c1_ctx = None
+    c1_cmd_pub = None
+    c1_gen = None
+    c1_done = not en_c1
     c2_cmd_pub = None
     c2_gen = None
     c2_done = not en_c2
 
     try:
-        # carter1 상태머신
+        # carter1 제어 초기화 (Surface Gripper + ToolChangerController + 소독 미션 제너레이터)
         if en_c1:
-            c1 = Carter1Spray(my_world, ros_node)
+            c1_robot.initialize()
+            c1_dof = list(c1_robot.dof_names)
+            dp = c1_robot.get_joint_positions()
+            for i, name in enumerate(ARM_JOINT_NAMES):
+                if name in c1_dof:
+                    dp[c1_dof.index(name)] = float(STOW_Q[i])
+            c1_robot.set_joint_positions(dp)
+            for _ in range(10):
+                my_world.step(render=True)
+            c1_gripper, c1_tool_changer = build_carter1_toolchanger(stage, c1_ee_path)
+
+            c1_cmd_pub = ros_node.create_publisher(Twist, C1_CMD_VEL, 10)
+            c1_sweep_done_pub = ros_node.create_publisher(Bool, C1_SWEEP_DONE, 10)
+            c1_sweep_state = {"req": None}
+            ros_node.create_subscription(Bool, C1_START_SWEEP,
+                                         lambda m: c1_sweep_state.__setitem__("req", bool(m.data)), 10)
+            print(f"[ROS] carter1 : pub {C1_SWEEP_DONE} + {C1_CMD_VEL}, sub {C1_START_SWEEP}")
+            c1_ctx = C1Ctx(my_world, c1_robot, c1_dof, c1_ee_path, c1_tool0_path, c1_gripper,
+                           ros_node, c1_cmd_pub, c1_sweep_done_pub, c1_sweep_state)
+            c1_ctx.tool_changer = c1_tool_changer
+            c1_gen = g_carter1_mission(c1_ctx)
 
         # carter2 제어 초기화
         if en_c2:
@@ -1417,11 +1758,12 @@ def main():
                            ros_node, c2_goal_pub, c2_cmd_pub, c2_pick_state)
             c2_gen = carter2_mission(c2_ctx)
 
-        print("\n[RUN] Play ▶ : carter1(소독 핸드오프) + carter2(폐기물 nav-pick) 동시 구동.\n"
-              "      두 로봇은 같은 루프에서 동시에 돈다. 단 각자 '자기 미션'이 명령해야 실제로 움직인다:\n"
+        print("\n[RUN] Play ▶ : carter1(소독 툴체인지+스윕) + carter2(폐기물 nav-pick) 동시 구동.\n"
+              "      두 로봇은 같은 루프에서 동시에 돈다. 각자 '자기 미션'이 명령해야 실제로 움직인다:\n"
               "        carter1 → Nav2(carter1) + spray_waypoint_mission -p namespace:=carter1\n"
+              "                  (첫 웨이포인트=노즐 거치대 → 첫 start_sweep 이 노즐 파지를 트리거)\n"
               "        carter2 → Nav2(carter2) + trash_can_nav_pick_mission -p namespace:=carter2\n"
-              "      ~5초마다 [HB] 하트비트로 두 FSM 상태를 출력한다(살아있는지·무엇을 기다리는지 확인용).\n")
+              "      ~5초마다 [HB] 하트비트로 두 미션 상태를 출력한다.\n")
 
         hb = 0
         step_i = 0
@@ -1437,12 +1779,15 @@ def main():
             rclpy.spin_once(ros_node, timeout_sec=0.0)
 
             if not my_world.is_playing():
-                if c1 is not None:
-                    c1.on_stopped()
                 continue
 
-            if c1 is not None:
-                c1.tick()
+            # 두 미션 제너레이터를 매 스텝 한 스텝치씩 전진(협조 루프, 서로 블로킹 안 함).
+            if not c1_done:
+                try:
+                    next(c1_gen)
+                except StopIteration:
+                    c1_done = True
+                    print("[C1] 미션 제너레이터 종료")
 
             if not c2_done:
                 try:
@@ -1451,10 +1796,15 @@ def main():
                     c2_done = True
                     print("[C2] 미션 제너레이터 종료")
 
-            # ── 하트비트 : 두 로봇 FSM 이 모두 살아 도는지 + 각자 무엇을 기다리는지 (~5초) ──
+            # ── 하트비트 : 두 로봇 미션이 모두 살아 도는지 + 각자 무엇을 기다리는지 (~5초) ──
             hb += 1
             if hb % 300 == 0:
-                c1s = c1.status() if c1 is not None else "(비활성 ENABLE_C1=0)"
+                if not en_c1:
+                    c1s = "(비활성 ENABLE_C1=0)"
+                elif c1_done:
+                    c1s = "완료(제너레이터 종료)"
+                else:
+                    c1s = c1_ctx.status
                 if not en_c2:
                     c2s = "(비활성 ENABLE_C2=0)"
                 elif c2_done:
@@ -1470,8 +1820,8 @@ def main():
     finally:
         # 정지 명령 + 정돈된 종료(순서: 타임라인 정지 → ROS 종료 → 시뮬 종료). 셧다운 크래시 완화.
         try:
-            if c1 is not None:
-                c1.publish_cmd(0.0)
+            if c1_cmd_pub is not None:
+                c1_cmd_pub.publish(Twist())
             if c2_cmd_pub is not None:
                 c2_cmd_pub.publish(Twist())
         except Exception:

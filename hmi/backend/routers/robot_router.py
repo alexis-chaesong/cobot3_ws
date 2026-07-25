@@ -4,16 +4,61 @@
 """
 from __future__ import annotations
 
+import os
+import struct
 from typing import Optional
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
+from fastapi.responses import FileResponse
 
-from config import ROBOT_IDS
+from config import CARTER_IDS, ROBOT_IDS, settings
 from database import get_connection, rows_to_dicts
-from models import CommandResult, EmergencyStopRequest
+from models import CommandResult, EmergencyStopRequest, MapInfo, NavigateRequest
 from robot_bridge import bridge_manager
 
 router = APIRouter(prefix="/api")
+
+
+# ── 맵 파일 파싱 유틸 (의존성 없이: yaml 은 단순 파서, png 는 IHDR 헤더 직접 읽기) ──
+def _parse_map_yaml(yaml_path: str) -> dict:
+    """map.yaml 에서 image/resolution/origin 만 뽑는 경량 파서(pyyaml 불필요)."""
+    info: dict = {}
+    with open(yaml_path, "r", encoding="utf-8") as fh:
+        for line in fh:
+            line = line.split("#", 1)[0].strip()
+            if not line or ":" not in line:
+                continue
+            key, _, val = line.partition(":")
+            key = key.strip()
+            val = val.strip()
+            if key == "image":
+                info["image"] = val
+            elif key == "resolution":
+                info["resolution"] = float(val)
+            elif key == "origin":
+                nums = val.strip("[]").split(",")
+                info["origin"] = [float(n) for n in nums[:2]]
+    return info
+
+
+def _png_size(png_path: str) -> tuple[int, int]:
+    """PNG IHDR 청크에서 (width, height). 8바이트 시그니처 + 8바이트(len+type) 뒤 8바이트."""
+    with open(png_path, "rb") as fh:
+        header = fh.read(24)
+    if header[:8] != b"\x89PNG\r\n\x1a\n":
+        raise ValueError("PNG 시그니처 아님")
+    width, height = struct.unpack(">II", header[16:24])
+    return width, height
+
+
+def _load_map_paths() -> tuple[str, str, dict]:
+    """(yaml_path, png_path, parsed) 반환. png 는 yaml 과 같은 디렉토리의 image 파일명."""
+    yaml_path = settings.map_yaml_path
+    if not os.path.isfile(yaml_path):
+        raise HTTPException(status_code=404, detail=f"map yaml 없음: {yaml_path}")
+    parsed = _parse_map_yaml(yaml_path)
+    png_path = os.path.join(os.path.dirname(yaml_path), parsed.get("image", ""))
+    return yaml_path, png_path, parsed
 
 
 @router.post("/commands/start-all", response_model=CommandResult)

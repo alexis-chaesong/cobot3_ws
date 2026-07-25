@@ -14,11 +14,12 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import math
 import threading
 import time
 from typing import Optional
 
-from config import ROBOT_IDS, settings
+from config import CARTER_IDS, ROBOT_IDS, settings
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +42,7 @@ class RobotBridgeManager:
     def __init__(self) -> None:
         self.node = None
         self.command_pub = None
+        self.goal_pub: dict = {}      # carter_id → PoseStamped 발행기 (/carterN/goal_pose)
         self._fastapi_loop: Optional[asyncio.AbstractEventLoop] = None
         self._output_queue: Optional[asyncio.Queue] = None
         self._spin_thread: Optional[threading.Thread] = None
@@ -55,6 +57,7 @@ class RobotBridgeManager:
         import rclpy
         from rclpy.node import Node
         from std_msgs.msg import String
+        from geometry_msgs.msg import PoseStamped, PoseWithCovarianceStamped
 
         self._fastapi_loop = fastapi_loop
         self._output_queue = output_queue
@@ -81,9 +84,25 @@ class RobotBridgeManager:
         # 명령은 단일 토픽. payload 안에 robot_id 포함.
         self.command_pub = self.node.create_publisher(String, "/robot/command", 10)
 
+        # ── 자유 클릭 내비게이션 (carter1/carter2 네임스페이스) ──
+        #   구독: /carterN/amcl_pose (PoseWithCovarianceStamped) → ROBOT_POSE 브로드캐스트
+        #   발행: /carterN/goal_pose (PoseStamped) — 운영자 수동 이동 전용.
+        #   ★carter2 는 자동 픽업이 쓰는 /carter2/trash_can_nav_goal 과 ★다른 토픽★ 이라
+        #     자유 클릭 goal 이 자동 픽업 goal 을 덮어쓰지 않는다(토픽 레벨 충돌 없음).
+        for carter_id in CARTER_IDS:
+            self.node.create_subscription(
+                PoseWithCovarianceStamped,
+                f"/{carter_id}/amcl_pose",
+                lambda msg, cid=carter_id: self._amcl_pose_callback(msg, cid),
+                10,
+            )
+            self.goal_pub[carter_id] = self.node.create_publisher(
+                PoseStamped, f"/{carter_id}/goal_pose", 10
+            )
+
         self._spin_thread = threading.Thread(target=self._spin_loop, daemon=True)
         self._spin_thread.start()
-        logger.info("RobotBridge 시작: %s", ROBOT_IDS)
+        logger.info("RobotBridge 시작: state=%s, nav=%s", ROBOT_IDS, CARTER_IDS)
 
     def _spin_loop(self) -> None:
         import rclpy
@@ -129,6 +148,26 @@ class RobotBridgeManager:
             }
         )
 
+    def _amcl_pose_callback(self, msg, carter_id: str) -> None:
+        """/carterN/amcl_pose (PoseWithCovarianceStamped) → ROBOT_POSE.
+        quaternion 에서 yaw 만 뽑아 브로드캐스트(지도 아이콘 회전용)."""
+        p = msg.pose.pose.position
+        q = msg.pose.pose.orientation
+        yaw = math.atan2(
+            2.0 * (q.w * q.z + q.x * q.y),
+            1.0 - 2.0 * (q.y * q.y + q.z * q.z),
+        )
+        self._dispatch(
+            {
+                "type": "ROBOT_POSE",
+                "robotId": carter_id,
+                "x": float(p.x),
+                "y": float(p.y),
+                "yaw": float(yaw),
+                "timestamp": time.time(),
+            }
+        )
+
     # ── 명령 발행 ────────────────────────────────────────────
     def publish_command(
         self,
@@ -149,6 +188,29 @@ class RobotBridgeManager:
         if payload is not None:
             body["payload"] = payload
         self.command_pub.publish(String(data=json.dumps(body, ensure_ascii=False)))
+
+    def publish_nav_goal(
+        self, robot_id: str, x: float, y: float, yaw: float = 0.0
+    ) -> bool:
+        """자유 클릭 이동 목표를 /{robot_id}/goal_pose 로 발행. robot_id 는 carter1/carter2.
+        발행 성공 True, 발행기 없거나 미초기화면 False."""
+        from geometry_msgs.msg import PoseStamped
+
+        pub = self.goal_pub.get(robot_id)
+        if pub is None:
+            logger.warning("goal_pub 미초기화/미지원 robot_id — 무시: %s", robot_id)
+            return False
+        goal = PoseStamped()
+        goal.header.frame_id = "map"
+        if self.node is not None:
+            goal.header.stamp = self.node.get_clock().now().to_msg()
+        goal.pose.position.x = float(x)
+        goal.pose.position.y = float(y)
+        goal.pose.orientation.z = math.sin(float(yaw) / 2.0)
+        goal.pose.orientation.w = math.cos(float(yaw) / 2.0)
+        pub.publish(goal)
+        logger.info("nav goal → /%s/goal_pose (%.2f, %.2f, yaw=%.2f)", robot_id, x, y, yaw)
+        return True
 
     # ── 스레드 → asyncio 경계 ────────────────────────────────
     def _dispatch(self, item: dict) -> None:

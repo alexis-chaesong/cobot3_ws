@@ -36,6 +36,55 @@ cobot3_ws/
 - `*.usd`, `*.usda`, `*.usdc`, `*.stl`, `*.dae`는 Git LFS로 관리됩니다. 클론 후 `git lfs install`을 먼저 실행하세요.
 - Isaac Sim 실험용 개인 스크립트(`isaacpjt/` 등)는 공유 대상이 아니며 git에서 제외되어 있습니다.
 
+## 📌 새 머신에서 클론했을 때 (로컬 환경 셋업)
+
+`git clone` + `colcon build`만으로는 Isaac 시뮬레이션 스크립트(`isaacpjt/M0609/13_,15_,16_...`)가
+바로 안 돌아갑니다. 아래를 순서대로 확인하세요.
+
+**① 레포 밖에서 따로 설치해야 하는 것 (레포와 무관, 한 번만)**
+- Isaac Sim 5.1 본체 — 공식 배포판을 홈 디렉토리 등 원하는 곳에 설치. `run_isaac*.sh`는
+  `~/dev_ws/isaac_sim/isaacsim/_build/linux-x86_64/release`를 기본 경로로 가정하므로,
+  다른 곳에 설치했다면 `run_isaac*.sh` 안의 `ISAAC=` 줄만 바꾸면 됩니다.
+- ROS2 Humble 시스템 설치(`/opt/ros/humble`).
+- carter_navigation 패키지가 들어있는 **별도 워크스페이스**
+  (`~/IsaacSim-ros_workspaces/humble_ws`, NVIDIA Isaac Sim ROS2 워크스페이스) — Nav2 자율주행에
+  필수. 다른 경로에 뒀다면 Isaac 스크립트 실행 전 `export CARTER_NAV_WS=/그경로/humble_ws`.
+- (선택) 원격 노트북에서 Isaac Sim 화면만 보고 싶다면 NVIDIA 공식 사이트에서
+  "Isaac Sim WebRTC Streaming Client" 설치 → Isaac 스크립트를 `LIVESTREAM=1`로 실행.
+
+**② pip로 추가 설치해야 하는 것 (Isaac Sim 내장 Python 대상)**
+```bash
+isaac_python -m pip install -r src/perception/requirements.txt
+```
+`ultralytics`(YOLO)가 없어서 필요합니다. **numpy 버전을 절대 건드리지 마세요** —
+그냥 `pip install ultralytics`만 하면 numpy가 2.x로 자동 승급되면서 Isaac 코어 패키지(numba 등)와
+충돌합니다. 위 requirements.txt가 `numpy==1.26.0`으로 고정해줍니다.
+
+**③ `.gitignore` 대상이라 로컬에 직접 채워 넣어야 하는 것**
+- `src/doosan-robot2/`, `src/onrobot_rg2/` — 외부 공식 레포. 다른 워크스페이스나 팀원에게서
+  복사해오세요. **주의**: `doosan-robot2/urdf/*.urdf`의 일부(`m0609_isaac_sim.urdf`,
+  `m0609_with_nozzle.urdf`)는 mesh 참조가 ROS `package://`가 아니라 **절대경로**로 박혀 있어서,
+  원본 머신의 경로가 남아있으면 이 머신에서 메시가 안 열립니다. 복사 후 반드시:
+  ```bash
+  ./fix_doosan_mesh_paths.sh
+  ```
+  를 실행해 절대경로를 이 레포의 실제 위치로 재작성하세요(여러 번 실행해도 안전).
+
+**④ 실행 방식(코드 아님, `run_isaac*.sh`가 이미 처리)**
+- Isaac Sim 내장 Python(3.11)에 rclpy를 물리려면 `isaacsim.ros2.bridge` extension의
+  `LD_LIBRARY_PATH`가 잡혀 있어야 합니다(안 그러면 extension startup 실패 → `import rclpy`도
+  연쇄로 실패). 시스템 ROS(3.10)를 직접 source하면 오히려 충돌해서 크래시 나니 하지 마세요.
+  `run_isaac.sh`/`run_isaac_single.sh`/`run_isaac_dual.sh`가 이걸 대신 세팅해주니 이 스크립트로
+  실행하세요. 옵션: `ISAAC_HEADLESS=1`(창 없이), `LIVESTREAM=1`(WebRTC 원격 스트리밍).
+- GPU 전력 캡, VPN/Meshnet 같은 머신 인프라 설정은 레포 범위 밖이라 각자 환경에 맞게 알아서
+  설정하면 됩니다.
+
+**⑤ 알려진 미해결 블로커**
+- `src/doosan-robot2/urdf/m0609_with_nozzle/m0609_with_nozzle.usd` (소독 노즐 커스텀 USD 에셋)가
+  레포/외부 워크스페이스 어디에도 없으면 `13_`(carter1 소독팔)·`15_`·`16_`의 툴체인저 로직이
+  막힙니다. 이 에셋을 아직 못 구했다면, 관련 스크립트는 씬 스폰까지만 검증되고 그 이후 단계는
+  라이브 실행이 안 됩니다 — 팀 내에서 이 파일을 공유받아야 해결됩니다.
+
 ## 📌 안내 
 ### 컴퓨터 켜서 작업 시작할 때: 
 무조건 git pull origin main을 먼저 해서 다른 팀원이 고친 최신 코드를 내 노트북으로 가져옵니다~!

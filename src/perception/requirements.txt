@@ -1,0 +1,8 @@
+# YOLO 추론용 의존성. Isaac Sim 내장 Python(3.11, python.sh)에는 기본으로 없어서 설치 필요:
+#   isaac_python -m pip install -r src/perception/requirements.txt
+#
+# numpy==1.26.0 고정 이유 : ultralytics 를 그냥 설치하면 numpy 가 2.x로 자동 업그레이드되는데,
+# Isaac Sim 코어 패키지(numba 등)가 numpy 2.x와 충돌한다. ultralytics 를 먼저/나중에 설치하든
+# 이 파일로 설치하면 numpy 가 항상 1.26.0 으로 고정된다. numpy 버전을 절대 손대지 말 것.
+ultralytics>=8.3
+numpy==1.26.0
