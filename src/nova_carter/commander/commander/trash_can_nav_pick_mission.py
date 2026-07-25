@@ -36,7 +36,16 @@ from commander.hmi_link import HmiLink
 # yaw 180 보정을 시도했었으나, RViz 2D Pose Estimate 로 Isaac Sim 상 실제 위치에 맞게
 # 직접 찍었을 때 주행이 정상 동작하는 것으로 확인되어 — 즉 map 프레임 = stage 프레임,
 # 반전 불필요 — 원래대로 되돌림.)
-CARTER_START_POSE = (16.66290495232035, -0.0029517927591273807, 0.0)  # x, y, yaw_deg
+#
+# [17_dual_task_select_tool_changer_integrated.py 대응] 이 노드는 원래 carter2(폐기물)
+# 전용으로만 쓰여서 시작pose가 carter2 스폰 하나로 하드코딩돼 있었다 — 이제 carter1도 같은
+# 제너릭 포워더를 namespace:=carter1 로 띄워 쓰므로, namespace 별 시작pose를 따로 둔다.
+# 미등록 namespace 는 기존 기본값(carter2 좌표)로 안전하게 폴백(하위호환, 13_/16_/기존 배선 무영향).
+CARTER_START_POSES = {
+    "": (16.66290495232035, -0.0029517927591273807, 0.0),        # 기존 기본값(변경 없음)
+    "carter2": (16.66290495232035, -0.0029517927591273807, 0.0),
+    "carter1": (18.5, 0.0, 0.0),   # 17_ C1_START_POSE(docking_station_1)와 일치
+}
 
 NAV_GOAL_TOPIC = "/trash_can_nav_goal"
 START_PICK_TOPIC = "/start_pick"
@@ -92,7 +101,9 @@ def main():
         pick_topic = START_PICK_TOPIC
     print(f"[NS] namespace='{ns or '(none)'}' → goal_sub='{goal_topic}', pick_pub='{pick_topic}'")
 
-    init_pose = create_pose(nav, *CARTER_START_POSE)
+    start_pose = CARTER_START_POSES.get(ns, CARTER_START_POSES[""])
+    print(f"[NS] namespace='{ns or '(none)'}' → AMCL 초기pose={start_pose}")
+    init_pose = create_pose(nav, *start_pose)
     nav.setInitialPose(init_pose)
 
     # ★ waitUntilNav2Active() 는 carter2/amcl lifecycle('active')을 get_state 로 폴링하는데,
