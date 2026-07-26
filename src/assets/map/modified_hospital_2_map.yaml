@@ -1,0 +1,6 @@
+image: modified_hospital_2_map.png
+resolution: 0.05
+origin: [-12.975, -4.975, 0.0000]
+negate: 0
+occupied_thresh: 0.65
+free_thresh: 0.196

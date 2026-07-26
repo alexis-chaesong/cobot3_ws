@@ -44,15 +44,22 @@ from isaacsim import SimulationApp
 
 # 기본 GUI. 헤드리스 스모크 테스트 시 ISAAC_HEADLESS=1.
 # 원격 노트북에서 WebRTC로 볼 때는 LIVESTREAM=1 (NVIDIA Isaac Sim WebRTC Streaming Client 필요).
+# ★검은 화면 버그 수정★ : headless=True 만 주면(hide_ui/width/height 없이) Kit 이 스트리밍할
+# 실제 창 콘텐츠 자체를 안 만들어서 클라이언트에 완전한 검은 화면(뷰포트뿐 아니라 스테이지 트리 등
+# UI 전체)이 뜸을 라이브로 확인함 — 원격 스트리밍 런북(Isaac Sim Remote Streaming Runbook)의
+# 검증된 설정(hide_ui=False + 명시적 해상도)으로 맞춘다.
 _LIVESTREAM = os.environ.get("LIVESTREAM", "0") == "1"
-simulation_app = SimulationApp({
-    "headless": os.environ.get("ISAAC_HEADLESS", "0") == "1" or _LIVESTREAM
-})
+simulation_app = SimulationApp(
+    {"headless": True, "hide_ui": False, "width": 960, "height": 540} if _LIVESTREAM
+    else {"headless": os.environ.get("ISAAC_HEADLESS", "0") == "1"}
+)
 
 from isaacsim.core.utils.extensions import enable_extension
 enable_extension("isaacsim.ros2.bridge")
 if _LIVESTREAM:
+    simulation_app.set_setting("/app/window/drawMouse", True)
     enable_extension("omni.kit.livestream.webrtc")
+    enable_extension("omni.services.livestream.nvcf")
 simulation_app.update()
 
 import sys
@@ -306,6 +313,20 @@ S_ACCEL = 3.0
 S_HOLD_STEPS = 6
 STOW_Q = np.array([0.0, -1.5708, 1.5708, 0.0, 0.0, 0.0])
 MAX_JOINT_STEP = 0.06
+
+# [설계중 — Nav2 주행 중 안정자세 후보] URDF FK 계산(m0609_isaac_sim.urdf 관절 origin 기준)으로
+# STOW_Q(j2=-90,j3=90)는 팔꿈치가 base_link 마운트 반대방향(-X)으로 접혀 챠시 중심에서 0.64m나
+# 벌어짐을 확인 — 부호를 반대로(j2=+90,j3=-90, 팔꿈치를 마운트 쪽/+X로 접음) 하면 높이는 STOW_Q와
+# 동일(챠시기준 z=1.20m, ZERO 자세 1.61m보다 낮음)하면서 수평거리는 0.18m로 크게 줄어든다(계산값,
+# 아래 표는 챠시(C2_ARTICULATION_ROOT) 원점 기준):
+#   ZERO(0,0,0,0,0,0)      : z=1.61m, 수평거리=0.23m
+#   STOW_Q(0,-90,90,0,0,0) : z=1.20m, 수평거리=0.64m
+#   NAV_STOW(0,90,-90,0,0,0): z=1.20m, 수평거리=0.18m  ← 채택 후보
+# 라이다 가림 제약(사용자 확인) : 링크가 base_link 마운트 높이(챠시기준 z=0.577m) 아래로 안 내려가야
+# 함 — 위 세 자세 모두 최저 링크 높이가 정확히 0.577m(마운트 자체)라 이 조건은 이미 만족.
+# ★미검증★ : 이건 순수 기하 계산이라 챠시 앞쪽 라이다/카메라·잡고 있는 노즐과의 실제 충돌 여부는
+# 반영 안 됨 — NAV_STOW_PREVIEW=1 로 실제 씬에 띄워 육안 확인 필요(아직 nav-leg 호출부에 배선 전).
+NAV_STOW_Q_DEG = [0.0, 90.0, -90.0, 0.0, 0.0, 0.0]
 # [GUI 확인 후 추가] 파지 직후 자세 → 스윕 저점(q_of_s(-1.0)) 진입을 부드럽게(3~4초).
 SPRAY_ENTRY_RAMP_STEPS = 220
 
@@ -948,6 +969,14 @@ def g_drive_straight_open_loop(ctx, distance, chassis_path, speed=FINAL_APPROACH
         yield
 
 
+def g_stow_arm_for_nav(ctx, ramp_steps=JOINT_RAMP_STEPS):
+    """[사용자 요청] 폐기물통을 쥐고 있지 않은 모든 Nav2 주행 구간 진입 전, 팔을 NAV_STOW_Q_DEG
+    (무게중심 낮춤+챠시 중심 정렬, 라이다 가림 없음 — 위 NAV_STOW_Q_DEG 정의부 계산 근거 참고)
+    자세로 접는다. ★폐기물통을 파지 중인 구간(DUMP/RETURN nav-leg)에는 호출 금지★ — 그 구간은
+    기존 TUCK_J1_DEG(파지 자세 유지, j1만 tuck)을 그대로 쓴다."""
+    yield from g_ramp_to_joint_positions(ctx, NAV_STOW_Q_DEG, ramp_steps)
+
+
 def g_run_nav_leg(ctx, standoff_xy, standoff_yaw, chassis_goal_xy, chassis_goal_yaw, label):
     """Nav2 목표(standoff) 발행 → /start_pick 대기 → 실제 위치 기준 회전→직진→회전."""
     for _ in range(30):
@@ -1506,6 +1535,10 @@ TC_DEBUG_CHASSIS_OFFSET_X = 0.35  # 거치대에서 이만큼 떨어진 곳에 �
 SPRAY_DEBUG_ONLY = os.environ.get("SPRAY_DEBUG_ONLY", "0") == "1"
 SPRAY_DEBUG_MAX_STEPS = int(os.environ.get("SPRAY_DEBUG_MAX_STEPS", "600"))  # 10초 @ 60Hz
 
+# NAV_STOW_PREVIEW=1 이면 미션/디버그 경로 다 건너뛰고 팔을 NAV_STOW_Q_DEG 자세로 잡은 채 그대로
+# 유휴 대기(원격 WebRTC 라이브스트림으로 육안 확인용, 임시 — 배선 확정 전 검토 단계).
+NAV_STOW_PREVIEW = os.environ.get("NAV_STOW_PREVIEW", "0") == "1"
+
 
 # ════════════════════════════════════════════════════════════════════════════
 #  I. [4/5 단계] 트래시 서브미션 — carter2_mission() (13_multi_robot_integrated.py) 그대로 이식.
@@ -1530,6 +1563,7 @@ def carter2_mission(ctx):
         yield
 
     sync_rmpflow_base_pose(ctx)
+    yield from g_stow_arm_for_nav(ctx)   # PICK 진입 전 — 아직 폐기물통 파지 전(빈 손)
     yield from g_run_nav_leg(ctx, standoff_xy, standoff_yaw, chassis_goal_xy, chassis_goal_yaw, "PICK")
     if not simulation_app.is_running():
         return
@@ -1634,10 +1668,12 @@ def carter2_mission(ctx):
     retract_target = grasp_position + LIFT_OFFSET
     yield from g_move_to_pose(ctx, retract_target, grasp_orientation, "내려놓은 후 후퇴")
     yield from g_hold_pose(ctx, retract_target, grasp_orientation, GRASP_HOLD_STEPS)
-    yield from g_ramp_to_joint_positions(ctx, [0.0] * 6, JOINT_RAMP_STEPS)
+    # [사용자 요청] 여기서부터 DOCK 까지는 폐기물통을 이미 내려놓은 뒤(빈 손)라 홈(0deg) 대신
+    # NAV_STOW_Q_DEG 로 접어 DOCK nav-leg 동안 안정 자세를 유지한다.
+    yield from g_stow_arm_for_nav(ctx)
     for _ in range(GRASP_HOLD_STEPS):
         yield
-    print("[INFO] c2 팔 홈(0deg) 복귀 완료")
+    print("[INFO] c2 팔 안정자세(NAV_STOW_Q_DEG) 복귀 완료")
 
     yield from g_drive_straight_open_loop(ctx, POST_RETURN_BACKUP_DISTANCE, C2_ARTICULATION_ROOT,
                                           FINAL_APPROACH_SPEED, reverse=True)
@@ -1708,6 +1744,9 @@ def g_nav_to_dock_approach(ctx, label="DOCK_APPROACH"):
     dock_standoff_xy = DOCK_APPROACH_XY - dock_dir * FINAL_APPROACH_DISTANCE
     ctx.status = f"{label}: 거치대 근처로 이동"
     sync_rmpflow_base_pose(ctx)
+    # SPRAY_PRE_GRASP(빈 손)·SPRAY_RETURN·TRASH_PRE_RETURN(노즐 보유) 셋 다 폐기물통은 안 쥔
+    # 상태라 안정자세 적용 대상 — 노즐을 쥐고 있어도 그리퍼가 계속 붙잡고 있으니 문제없음.
+    yield from g_stow_arm_for_nav(ctx)
     yield from g_run_nav_leg(ctx, dock_standoff_xy, DOCK_APPROACH_YAW, DOCK_APPROACH_XY, DOCK_APPROACH_YAW, label)
     if not simulation_app.is_running():
         return
@@ -1725,6 +1764,7 @@ def g_spray_mission_body(ctx):
     spray_standoff_xy = SPRAY_WP1_XY - spray_dir * FINAL_APPROACH_DISTANCE
     sync_rmpflow_base_pose(ctx)
     ctx.status = "SPRAY: 웨이포인트로 이동"
+    yield from g_stow_arm_for_nav(ctx)   # 노즐은 보유 중이지만 폐기물통은 아님 — 안정자세 적용
     yield from g_run_nav_leg(ctx, spray_standoff_xy, SPRAY_WP1_YAW, SPRAY_WP1_XY, SPRAY_WP1_YAW, "SPRAY_GOTO")
     if not simulation_app.is_running():
         return
@@ -1942,9 +1982,10 @@ def main():
     c2_robot.initialize()
     c2_dof = list(c2_robot.dof_names)
     dp = c2_robot.get_joint_positions()
-    for name in ARM_JOINT_NAMES:
+    for i, name in enumerate(ARM_JOINT_NAMES):
         if name in c2_dof:
-            dp[c2_dof.index(name)] = 0.0
+            deg = NAV_STOW_Q_DEG[i] if NAV_STOW_PREVIEW else 0.0
+            dp[c2_dof.index(name)] = np.radians(deg)
     c2_robot.set_joint_positions(dp)
     for _ in range(30):
         my_world.step(render=True)
@@ -1962,8 +2003,18 @@ def main():
     print(f"[CHECK] gripper prim path = {gripper_path}")
     print("=" * 64)
 
-    if os.environ.get("ISAAC_HEADLESS", "0") != "1":
+    if os.environ.get("ISAAC_HEADLESS", "0") != "1" or _LIVESTREAM:
+        # _LIVESTREAM 도 헤드리스로 뜨지만(뷰포트를 WebRTC로 스트리밍) 카메라 위치는 GUI 때와
+        # 똑같이 필요함 — 이게 없으면 뷰포트 카메라가 기본 위치(로봇과 무관)에 남아 스트림이
+        # 빈/검은 화면으로 보임(라이브 확인으로 재현됨).
         setup_gui_camera_and_light(stage, C2_ARM_ROOT)
+
+    if NAV_STOW_PREVIEW:
+        print(f"[NAV_STOW_PREVIEW] 팔을 NAV_STOW_Q_DEG={NAV_STOW_Q_DEG} 자세로 고정하고 유휴 대기 "
+              "— WebRTC로 육안 확인 후 Ctrl+C 로 종료하세요.")
+        while simulation_app.is_running():
+            my_world.step(render=True)
+        _shutdown(); return
 
     if not (TC_DEBUG_ONLY or SPRAY_DEBUG_ONLY):
         run_full_mission(my_world, stage, c2_robot, c2_ee_path, c2_tool0_path, c2_dof)

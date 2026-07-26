@@ -13,5 +13,5 @@ ISAAC="$HOME/dev_ws/isaac_sim/isaacsim/_build/linux-x86_64/release"
 # ROS2 브리지 라이브러리 경로(= .bashrc 의 isaac_ros alias 와 동일) — 이게 없으면
 # isaacsim.ros2.bridge extension startup 이 실패하고, 연쇄로 rclpy import 도 실패한다.
 export LD_LIBRARY_PATH="$LD_LIBRARY_PATH:$ISAAC/exts/isaacsim.ros2.bridge/humble/lib"
-cd /home/rokey/cobot3_ws
+cd "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 exec "$ISAAC/python.sh" isaacpjt/M0609/16_dual_sg_tool_changer_integrated.py "$@"
