@@ -7,6 +7,10 @@ multi_robot_yolo_viewer.py  ★14번(멀티로봇+사람) 전용 실시간 YOLO 
   1) cv2.imshow 로 "두 로봇 나란히" 실시간 창을 띄운다(사용자 확인용 GUI).
   2) 각 로봇 전방에 '사람이 위험 근접'인지 판정해 /carterN/person_alert(Bool) 를 발행한다.
      → 14 의 PersonGate 가 이 토픽을 받아 스크립트 구동 cmd_vel 구간(스윕/파지접근)을 정지·재개.
+  3) ★2026-07-26 추가★ bbox 가 그려진(YOLO res.plot()) 프레임을 JPEG 로 인코딩해
+     /carterN/vision/annotated/compressed (sensor_msgs/CompressedImage) 로도 발행한다.
+     → hmi/backend 가 이 토픽을 구독해 MJPEG 로 웹 VisionFeedPanel 에 중계한다(--no-window 로
+     로컬 cv2 창 없이 헤드리스 서버에서 이 발행만 켜두는 것도 가능).
 
 ★왜 별도 프로세스(시스템 python3)인가★
   Isaac 번들 opencv 는 GUI(GTK/Qt) 가 없어 Isaac python.sh 안에서는 cv2.imshow 가 안 뜬다
@@ -63,6 +67,11 @@ def _parse_args():
                    help="화면 가로 중앙 band 폭 비율(0~1). 이 band 안 중심이어야 위험판정 (기본 0.6)")
     p.add_argument("--no-window", action="store_true", help="창 없이 alert 만 발행(headless)")
     p.add_argument("--max-width", type=int, default=1600, help="합성 창 최대 가로 픽셀")
+    p.add_argument("--publish-annotated", dest="publish_annotated", action="store_true", default=True,
+                   help="bbox 그려진 프레임을 /<ns>/vision/annotated/compressed 로 발행(기본 on, 웹 HMI 용)")
+    p.add_argument("--no-publish-annotated", dest="publish_annotated", action="store_false",
+                   help="annotated 프레임 발행 끄기(CPU 절약)")
+    p.add_argument("--annotated-jpeg-quality", type=int, default=70, help="annotated JPEG 압축 품질(0-100)")
     return p.parse_args()
 
 
@@ -129,7 +138,7 @@ def main() -> int:
     import rclpy
     from rclpy.node import Node
     from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
-    from sensor_msgs.msg import Image
+    from sensor_msgs.msg import Image, CompressedImage
     from std_msgs.msg import Bool
     from ultralytics import YOLO
 
@@ -145,13 +154,17 @@ def main() -> int:
     qos = QoSProfile(reliability=ReliabilityPolicy.BEST_EFFORT,
                      history=HistoryPolicy.KEEP_LAST, depth=1)
 
-    state = {}  # ns -> dict(frame, alert_pub)
+    state = {}  # ns -> dict(frame, alert_pub, annotated_pub)
     for ns in args.robots:
         topic = f"/{ns}/{args.image_suffix}"
         st = {"msg": None, "alert_pub": node.create_publisher(Bool, f"/{ns}/person_alert", 10)}
+        if args.publish_annotated:
+            st["annotated_pub"] = node.create_publisher(
+                CompressedImage, f"/{ns}/vision/annotated/compressed", qos)
         state[ns] = st
         node.create_subscription(Image, topic, (lambda m, s=st: s.__setitem__("msg", m)), qos)
-        print(f"[INFO] {ns}: sub {topic} → pub /{ns}/person_alert", flush=True)
+        print(f"[INFO] {ns}: sub {topic} → pub /{ns}/person_alert"
+              + (f" + /{ns}/vision/annotated/compressed" if args.publish_annotated else ""), flush=True)
 
     show = not args.no_window
     win = "Multi-Robot YOLO (carter1 | carter2)"
@@ -205,6 +218,17 @@ def main() -> int:
                                 cv2.rectangle(ann, (int(x1), int(y1)), (int(x2), int(y2)), (0, 0, 255), 3)
                 # alert 는 매 주기 발행(사람 없으면 False) → 게이트가 즉시 해제 가능
                 st["alert_pub"].publish(Bool(data=bool(alert)))
+                # ★2026-07-26★ bbox 그려진 프레임을 JPEG 압축해 발행(웹 HMI VisionFeedPanel 용).
+                ann_pub = st.get("annotated_pub")
+                if ann_pub is not None and ann is not None:
+                    ok_enc, jpg = cv2.imencode(
+                        ".jpg", ann, [cv2.IMWRITE_JPEG_QUALITY, int(args.annotated_jpeg_quality)])
+                    if ok_enc:
+                        cimg = CompressedImage()
+                        cimg.header.stamp = node.get_clock().now().to_msg()
+                        cimg.format = "jpeg"
+                        cimg.data = jpg.tobytes()
+                        ann_pub.publish(cimg)
                 if show:
                     panels.append(make_panel(ann, ns, n_det, alert))
 

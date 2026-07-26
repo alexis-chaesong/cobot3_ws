@@ -51,3 +51,15 @@
   color: var(--state-error);
   font-weight: 500;
 }
+
+/* 관리자 UI 액션 로그 — 로봇 이벤트와 구분되도록 살짝 강조 */
+.log-panel__row--ui .log-panel__msg {
+  color: var(--ink);
+  font-weight: 600;
+}
+.log-panel__ui-icon {
+  display: inline-block;
+  vertical-align: -1px;
+  margin-right: 4px;
+  color: var(--ink-muted);
+}
