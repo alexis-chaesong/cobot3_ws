@@ -137,7 +137,18 @@ C1_TRASH_CAN_PRIM = f"{C1_SCOPE}/small_trash_can_body"   # 공용 쓰레기통 �
 C1_EXTRA_PHYSICS = f"{C1_SCOPE}/PhysicsScene"
 C1_GROUND_PLANE = f"{C1_SCOPE}/GroundPlane"
 
-C1_START_POSE = dict(x=18.5, y=0.0, z=0.05, yaw_deg=0.0)     # docking_station_1
+C1_START_POSE = dict(x=18.5, y=0.2317, z=0.08, yaw_deg=90.0)     # docking_station_1
+# [2026-07-26 사용자 요청] 스폰 직후 챠시가 살짝 움찔거리는 현상 관찰 — 바닥/도킹스테이션 데칼
+# 메시와 z 방향 여유가 거의 없어(특히 carter2 는 원래 z=0.0) 첫 물리 스텝에서 접촉보정으로 튀는
+# 것으로 추정. 두 로봇 다 z 를 살짝(0.03~0.08m) 올려 여유를 둠.
+# [2026-07-26 사용자 요청 2] 팔 베이스가 도킹스테이션 중심(원래 x,y=18.5,0.0)에 오도록 y 를
+# +0.2317(=-MOUNT_OFFSET.x, yaw=90도에서 로컬 -X 오프셋이 그대로 월드 -Y 오프셋이 됨) 만큼
+# 보정 — 팔 베이스 실측 (18.50,-0.23,0.66) 확인 후 역산. 이제 챠시가 (18.5,0.2317)에 스폰돼야
+# 팔 베이스가 (18.5,0.0)에 정확히 옴(HOME1_XY 도 같이 이동하므로 도킹 복귀 지점도 일관되게 이동).
+# [2026-07-26 사용자 요청] 스폰/docking_station 복귀 방향을 +Y 로 통일(기존 0도=+X). 노즐 거치대
+# 파킹 각도(DOCK1_PARK_YAW, 후진 진입 최종 방향)는 이미 +Y 라 이제 셋 다 일치함. ★주의★: ROS 쪽
+# trash_can_nav_pick_mission.py 의 CARTER_START_POSES["carter1"] yaw 도 반드시 같이 90.0 으로
+# 맞춰야 함 — 안 맞추면 AMCL 초기pose 가 실제 스폰 방향과 달라져 위치추정이 처음부터 틀어짐.
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -153,7 +164,7 @@ TRASH_CAN_PRIM = f"{C2_SCOPE}/small_trash_can_body"          # ★공용 쓰레�
 C2_EXTRA_PHYSICS = f"{C2_SCOPE}/PhysicsScene"
 C2_GROUND_PLANE = f"{C2_SCOPE}/GroundPlane"
 
-C2_START_POSE = dict(x=16.66290495232035, y=-0.0029517927591273807, yaw_deg=0.0)  # docking_station_02
+C2_START_POSE = dict(x=16.66290495232035, y=-0.0029517927591273807 + 0.2317, z=0.08, yaw_deg=90.0)  # docking_station_02
 
 ARM_URDF = str(_THIS_DIR / "rmpflow" / "m0609_isaac_sim.urdf")
 NO_GRIPPER_URDF = str(_WS_ROOT / "src" / "doosan-robot2" / "urdf" / "m0609_isaac_sim.urdf")
@@ -217,26 +228,42 @@ FINAL_MOVE_SETTLE_STEPS = 30
 FINAL_NUDGE_DISTANCE = 0.00
 PRE_ROTATE_NUDGE_DISTANCE = 0.25
 
-DOCK_NUDGE_DISTANCE = 0.10
-DOCK_NUDGE_SPEED = 0.10
-DOCK_ONESHOT_MAX_ITERS = 3
-DOCK_ONESHOT_POS_TOL = 0.02
-DOCK_ONESHOT_DRIVE_SPEED = 0.08
-DOCK_ONESHOT_SETTLE_STEPS = 20
-
 DOCK_APPROACH_SKIP_XY_RADIUS = 0.15    # 이 안이면 "이미 거치대 근처"로 보고 nav-leg 생략
 DOCK_APPROACH_SKIP_YAW_TOL = np.radians(15.0)
 
 # ── 노즐 거치대(로봇별 2개) ──
 NOZZLE_SOURCE_PRIMPATH = "/World/m0609/nozzle_base_link"   # tool0_to_nozzle 조인트 밖(형제) — 안 딸려옴
 NOZZLE_DOCK_HEIGHT = 0.65
-DOCK_STANDOFF = 0.35        # 챠시 파킹지점-거치대 팔 접근거리(15_/16_ 검증값, 절대 늘리지 않음 —
-                            # IK grasp reach 가 이 거리 기준으로 튜닝됨). 접근방향은 -Y(사용자 결정).
+DOCK_STANDOFF = 0.85        # 챠시 파킹지점-거치대 팔 접근거리. 접근방향은 -Y(사용자 결정).
+                            # [2026-07-26] 원래 15_/16_ 검증값 0.35 → 전진진입으로 0.45/0.40/0.60(성공)/
+                            # 1.00(실패, "노즐 상공 접근" IK 부터 안 풀림) 순으로 라이브 확인. 사용자가
+                            # 팔 스펙 reach=0.9m 라고 알려줘서, 팔이 챠시 뒤쪽에 달린 걸 이용해 "후진
+                            # 진입"(g_run_nav_leg reverse_entry=True)으로 전환 — 후진 진입 시 팔↔노즐
+                            # 수평거리 = DOCK_STANDOFF-0.2317 이라 같은 팔 reach 로 훨씬 더 먼
+                            # DOCK_STANDOFF 를 쓸 수 있음(계산상 이론 한계 ~1.06m). 0.85 로 마진을 두고
+                            # 시작 — 라이브 IK 재확인 필요, 실패율 오르면 낮출 것.
+                            # 다시 낮출 것.
 # [사용자 요청] 거치대가 스폰 바로 옆(0.35m)이라 너무 가까워 보임 + Nav2 실주행 테스트를 위해서도
 # "스폰↔거치대"가 제자리 회전만으로 끝나면 의미가 없다 — 그래서 거치대 자체는 스폰에서
 # DOCK_HOME_DISTANCE 만큼 멀리 두고, 파킹지점(DOCKn_APPROACH_XY)만 거치대에서 DOCK_STANDOFF(검증된
 # IK reach 거리, 불변) 만큼 못미친 곳에 둔다 — nav-leg 가 스폰→파킹지점 구간을 실제로 주행하게 됨.
 DOCK_HOME_DISTANCE = 1.5    # 스폰-거치대 거리[m]. ⚠ 라이브 미검증(주변 벽/장애물과 안 부딪히는지 확인 필요).
+
+# [2026-07-26 사용자 요청] 노즐이 허공에 매달려만 있어 실제 거치대 물리 형상(기둥+캔틸레버 암)을
+# 추가한다. 로봇은 항상 노즐 북쪽(+Y, DOCKn_APPROACH_XY 방향)에서 접근해 파킹하므로(도킹 구간이
+# g_run_nav_leg 한 번의 회전→직진→회전으로 끝나고 그 이후 챠시가 더 움직이지 않음 — 정밀보정 루프는
+# 제거됨, 아래 참고), 기둥을 노즐 남쪽(-Y)으로 오프셋해 세우면 챠시 파킹 구역과 기하학적으로 겹치지
+# 않는다. 손잡이(NOZZLE_DOCKn_XY, NOZZLE_DOCK_HEIGHT) 바로 위 TC_EE_OFFSET(0.15m) 수직 통로는
+# 캔틸레버 암이 절대 덮지 않음(암은 손잡이와 같은 높이에서 옆으로만 붙는다) — 팔이 위에서 곧장 하강해
+# 파지하는 경로를 막지 않기 위함.
+NOZZLE_STAND_POLE_OFFSET = 0.20      # 기둥을 손잡이에서 남쪽(-Y)으로 띄우는 거리[m]
+NOZZLE_STAND_POLE_RADIUS = 0.03
+NOZZLE_STAND_ARM_RADIUS = 0.02       # 기둥→손잡이 캔틸레버 암 반지름[m]
+NOZZLE_STAND_BASE_RADIUS = 0.12      # 바닥 받침 원판 반지름[m]
+NOZZLE_STAND_BASE_HEIGHT = 0.03
+# 단계적 롤아웃: 처음엔 형상만 보이고 충돌은 꺼서 배치를 라이브로 먼저 눈으로 확인 — 배치 확정되면
+# True 로 바꿔 실제 충돌 활성화(형상을 다시 만들 필요 없이 이 플래그만 바꾸면 됨).
+NOZZLE_STAND_COLLISION_ENABLED = False
 
 NOZZLE_DOCK1_SCOPE = "/World/NozzleDock1"
 NOZZLE_TOOL_PATH_C1 = f"{NOZZLE_DOCK1_SCOPE}/nozzle_tool"
@@ -245,7 +272,8 @@ NOZZLE_HOLD_JOINT_PATH_C1 = f"{NOZZLE_DOCK1_SCOPE}/hold_joint"
 NOZZLE_HOLD_ANCHOR_PATH_C1 = f"{NOZZLE_DOCK1_SCOPE}/hold_anchor"
 NOZZLE_DOCK1_XY = np.array([C1_START_POSE["x"], C1_START_POSE["y"] - DOCK_HOME_DISTANCE])
 DOCK1_APPROACH_XY = NOZZLE_DOCK1_XY + np.array([0.0, DOCK_STANDOFF])
-DOCK1_APPROACH_YAW = -np.pi / 2.0     # 남쪽(-Y)을 보고 거치대 접근
+DOCK1_APPROACH_YAW = -np.pi / 2.0     # 남쪽(-Y)을 보고 거치대 접근(Nav2 이동 방향 기준)
+DOCK1_PARK_YAW = DOCK1_APPROACH_YAW + np.pi   # [2026-07-26] 후진 진입 최종 파킹 방향(북쪽) — 아래 참고
 
 NOZZLE_DOCK2_SCOPE = "/World/NozzleDock2"
 NOZZLE_TOOL_PATH_C2 = f"{NOZZLE_DOCK2_SCOPE}/nozzle_tool"
@@ -255,6 +283,23 @@ NOZZLE_HOLD_ANCHOR_PATH_C2 = f"{NOZZLE_DOCK2_SCOPE}/hold_anchor"
 NOZZLE_DOCK2_XY = np.array([C2_START_POSE["x"], C2_START_POSE["y"] - DOCK_HOME_DISTANCE])
 DOCK2_APPROACH_XY = NOZZLE_DOCK2_XY + np.array([0.0, DOCK_STANDOFF])
 DOCK2_APPROACH_YAW = -np.pi / 2.0
+DOCK2_PARK_YAW = DOCK2_APPROACH_YAW + np.pi
+
+# [2026-07-26 사용자 제안] 팔(MOUNT_OFFSET x=-0.2317, 챠시 원점보다 뒤쪽 장착)이 노즐 거치대에 "후진
+# 진입"하면, 전진 진입 대비 팔↔노즐 수평거리가 2*0.2317m 만큼 짧아져 같은 팔 도달거리(스펙 0.9m)로도
+# DOCK_STANDOFF 를 훨씬 크게 잡을 수 있다(전진: DOCK_STANDOFF+0.2317, 후진: DOCK_STANDOFF-0.2317).
+# g_run_nav_leg(reverse_entry=True) 로 목표 반대방향을 보고 후진으로 진입 — 도착 시 이미 거치대 반대
+# 방향(DOCKn_PARK_YAW)을 보고 있으므로 파지/반납 직후 별도 후진+180도 회전(g_backup_and_turn_away)도
+# 불필요해짐(이미 그 방향을 보고 있어 바로 다음 leg 로 갈 수 있음).
+
+# [사용자 요청] 노즐 거치대 파킹지점(DOCKn_APPROACH_XY)이 원래 스폰지점(docking_station_1/02,
+# C1/C2_START_POSE)과 달라져(y 로 DOCK_HOME_DISTANCE-DOCK_STANDOFF 만큼 벌어짐) 작업 완료 후 로봇이
+# 원래 도킹스테이션이 아닌 곳에 최종 파킹되는 문제 발견 — trash/spray 작업 완료 시 마지막에 원래
+# docking_station_1/02 로 복귀하는 nav-leg 를 추가한다(HOME1/2_XY/YAW).
+HOME1_XY = np.array([C1_START_POSE["x"], C1_START_POSE["y"]])
+HOME1_YAW = np.radians(C1_START_POSE["yaw_deg"])
+HOME2_XY = np.array([C2_START_POSE["x"], C2_START_POSE["y"]])
+HOME2_YAW = np.radians(C2_START_POSE["yaw_deg"])
 
 # Surface Gripper 튜닝(15_/16_ 검증값 — grip_travel 을 IK 접근오차보다 넉넉히, clearance 는 최소).
 MAX_GRIP_DISTANCE = 0.04
@@ -271,6 +316,7 @@ TC_FINGERTIP_OFFSET_FROM_TOOL0 = np.zeros(3)                # 맨몸 팔 : finge
 TC_GRASP_SETTLE_STEPS = 30
 TC_REDOCK_SETTLE_STEPS = 20
 TC_JOINT_RAMP_STEPS = 200
+TC_IK_RETRY_COUNT = 2   # [2026-07-26] IK 실패 시 그 자리(챠시 이동 없음)에서 재시도 횟수(최대 3회 시도)
 TC_TARGET_BIAS_COMPENSATION = np.array([0.006, -0.0003, 0.0])   # URDF-USD 형상 불일치 고정 바이어스
 
 WALL_X = 0.575
@@ -292,7 +338,10 @@ SPRAY_ENTRY_RAMP_STEPS = 220
 
 STROKES_PER_WIPE = 2
 MOVE_DISTANCE = 0.25
-FORWARD_DISTANCE = 10.5
+FORWARD_DISTANCE = 9.5     # [2026-07-26 사용자 요청] 스윕이 벽까지 도달해 챠시가 끼는 문제 발견
+                           # (Nav2 backup/spin 복구도 실패, 로봇 전복까지 간 적 있음) — 분사
+                           # 사이클 약 2번 분(~1.0m, 사이클당 progress 증가폭 약 0.46~0.5m 실측
+                           # 기준) 줄여서 벽에서 여유를 둠. 그래도 벽에 닿으면 더 줄일 것.
 FORWARD_SPEED = 0.35
 FORWARD_ACCEL = 0.50
 KP_YAW = 2.5
@@ -623,6 +672,14 @@ def build_carter2():
             ta.Set(Gf.Vec3d(float(_origin[0]), float(_origin[1]), TRASH_SPAWN_Z))
             print(f"[SPAWN] 공용 trash 중심 → {TRASH_SPAWN_FIXED} (원점 {_origin.tolist()})")
 
+    # [2026-07-26] build_carter1() 과 달리 여기엔 _place_xform 호출이 원래 없었음 — carter2 는 참조된
+    # USD 에셋의 기본 자세(yaw=0/+X)를 그대로 써왔고, C2_START_POSE["yaw_deg"] 는 값만 있고 실제로
+    # 적용된 적이 없었다(우연히 기본값이 0이라 안 드러남). +Y 스폰 방향으로 바꾸며 발견 — carter1 과
+    # 동일하게 명시적으로 배치한다.
+    _place_xform(f"{C2_SCOPE}/Nova_Carter_ROS", C2_START_POSE["x"], C2_START_POSE["y"],
+                 C2_START_POSE["z"], C2_START_POSE["yaw_deg"])
+    simulation_app.update()
+
     chassis2 = stage.GetPrimAtPath(C2_ARTICULATION_ROOT)
     chassis2_m = UsdGeom.Xformable(chassis2).ComputeLocalToWorldTransform(Usd.TimeCode.Default())
     _wp = Gf.Transform(chassis2_m).GetTranslation()
@@ -685,6 +742,39 @@ def build_nozzle_dock(scope, tool_path, hold_joint_path, hold_anchor_path, dock_
     hold_joint.CreateExcludeFromArticulationAttr().Set(True)
     hold_joint.CreateJointEnabledAttr().Set(True)
     print(f"[SCENE] 임시 거치 조인트[{label}] authoring = {hold_joint_path} (anchor={hold_anchor_path})")
+
+    # [2026-07-26] 실제 거치대 물리 형상(기둥+받침+캔틸레버 암) — 18_ build_people()의
+    # UsdGeom.Cylinder+CollisionAPI 정적 충돌체 패턴 재사용. 기둥은 손잡이(dock_xy)에서 남쪽(-Y)으로
+    # NOZZLE_STAND_POLE_OFFSET 만큼 띄워 세운다(로봇 파킹 구역과 기하학적으로 안 겹치도록).
+    pole_xy = np.array([dock_xy[0], dock_xy[1] - NOZZLE_STAND_POLE_OFFSET])
+
+    base = UsdGeom.Cylinder.Define(stage, f"{scope}/stand_base")
+    base.CreateRadiusAttr(float(NOZZLE_STAND_BASE_RADIUS))
+    base.CreateHeightAttr(float(NOZZLE_STAND_BASE_HEIGHT))
+    base.CreateAxisAttr(UsdGeom.Tokens.z)
+    UsdGeom.Xformable(base).AddTranslateOp().Set(
+        Gf.Vec3d(float(pole_xy[0]), float(pole_xy[1]), NOZZLE_STAND_BASE_HEIGHT / 2.0))
+
+    pole = UsdGeom.Cylinder.Define(stage, f"{scope}/stand_pole")
+    pole.CreateRadiusAttr(float(NOZZLE_STAND_POLE_RADIUS))
+    pole.CreateHeightAttr(float(dock_height))
+    pole.CreateAxisAttr(UsdGeom.Tokens.z)
+    UsdGeom.Xformable(pole).AddTranslateOp().Set(
+        Gf.Vec3d(float(pole_xy[0]), float(pole_xy[1]), dock_height / 2.0))
+
+    arm_mid_xy = (pole_xy + np.asarray(dock_xy)) / 2.0
+    arm = UsdGeom.Cylinder.Define(stage, f"{scope}/stand_arm")
+    arm.CreateRadiusAttr(float(NOZZLE_STAND_ARM_RADIUS))
+    arm.CreateHeightAttr(float(NOZZLE_STAND_POLE_OFFSET))
+    arm.CreateAxisAttr(UsdGeom.Tokens.y)   # 오프셋이 순수 -Y 방향이라 회전 없이 Y축 실린더로 정렬됨
+    UsdGeom.Xformable(arm).AddTranslateOp().Set(
+        Gf.Vec3d(float(arm_mid_xy[0]), float(arm_mid_xy[1]), float(dock_height)))
+
+    if NOZZLE_STAND_COLLISION_ENABLED:
+        for geom in (base, pole, arm):
+            UsdPhysics.CollisionAPI.Apply(geom.GetPrim())
+    print(f"[SPAWN] 노즐 거치대 형상[{label}] 기둥=({pole_xy[0]:.3f},{pole_xy[1]:.3f}) "
+          f"충돌={'ON' if NOZZLE_STAND_COLLISION_ENABLED else 'OFF(시각only)'}")
     return True
 
 
@@ -802,7 +892,7 @@ class RobotCtx:
                  arm_root, articulation_root, ros_node, nav_goal_pub, cmd_pub, pick_state,
                  task_select_state, dock_xy, dock_height, dock_approach_xy, dock_approach_yaw,
                  tool_path, tcp_path, hold_joint_path, hold_anchor_path,
-                 spray_wp_xy, spray_wp_yaw):
+                 spray_wp_xy, spray_wp_yaw, home_xy, home_yaw, dock_park_yaw):
         self.name = name
         self.world = world; self.robot = robot; self.rmpflow = rmpflow
         self.dof_names = dof_names; self.tool0_path = tool0_path; self.ee_path = ee_path
@@ -812,9 +902,11 @@ class RobotCtx:
         self.pick_state = pick_state; self.task_select_state = task_select_state
         self.dock_xy = dock_xy; self.dock_height = dock_height
         self.dock_approach_xy = dock_approach_xy; self.dock_approach_yaw = dock_approach_yaw
+        self.dock_park_yaw = dock_park_yaw   # [2026-07-26] 후진 진입 최종 파킹 방향(=dock_approach_yaw+pi)
         self.tool_path = tool_path; self.tcp_path = tcp_path
         self.hold_joint_path = hold_joint_path; self.hold_anchor_path = hold_anchor_path
         self.spray_wp_xy = spray_wp_xy; self.spray_wp_yaw = spray_wp_yaw
+        self.home_xy = home_xy; self.home_yaw = home_yaw
         self.stage = omni.usd.get_context().get_stage()
         self.status = "시작 대기"
         self.tool_changer = None            # ToolChangerController, main() 이 주입
@@ -949,8 +1041,14 @@ def g_stow_arm_for_nav(ctx, ramp_steps=JOINT_RAMP_STEPS):
     yield from g_ramp_to_joint_positions(ctx, NAV_STOW_Q_DEG, ramp_steps)
 
 
-def g_run_nav_leg(ctx, standoff_xy, standoff_yaw, chassis_goal_xy, chassis_goal_yaw, label):
-    """Nav2 목표(standoff) 발행 → /start_pick 대기 → 실제 위치 기준 회전→직진→회전."""
+def g_run_nav_leg(ctx, standoff_xy, standoff_yaw, chassis_goal_xy, chassis_goal_yaw, label,
+                  reverse_entry=False):
+    """Nav2 목표(standoff) 발행 → /start_pick 대기 → 실제 위치 기준 회전→직진→회전.
+    [2026-07-26] reverse_entry=True 면 목표를 향해 도는 대신 목표 반대방향(=chassis_goal_yaw)을 보고
+    후진으로 진입한다 — 팔이 챠시 원점보다 뒤쪽(MOUNT_OFFSET x<0)에 달려있어, 노즐 거치대처럼 팔이
+    닿아야 하는 지점에 후진 진입하면 그만큼 팔-목표 거리가 짧아져 더 먼 DOCK_STANDOFF 를 쓸 수 있다
+    (사용자 제안). 도착 시 이미 최종 방향(chassis_goal_yaw=목표 반대방향)을 보고 있으므로 이후 별도
+    회전 없이 바로 멀어질 수 있다는 게 부가 이점."""
     for _ in range(30):
         yield
     ctx.pick_state["start"] = False
@@ -977,52 +1075,22 @@ def g_run_nav_leg(ctx, standoff_xy, standoff_yaw, chassis_goal_xy, chassis_goal_
     to_goal = chassis_goal_xy - cur
     entry_distance = float(np.linalg.norm(to_goal))
     entry_yaw = float(np.arctan2(to_goal[1], to_goal[0]))
+    if reverse_entry:
+        entry_yaw = wrap_pi(entry_yaw + np.pi)
     yield from g_rotate_in_place(ctx, entry_yaw, FINAL_ROTATE_KP, FINAL_ROTATE_KD, FINAL_ROTATE_W_MAX,
                                  FINAL_ROTATE_MAX_W_STEP, FINAL_ROTATE_TOLERANCE_RAD, ctx.articulation_root)
-    yield from g_drive_straight_open_loop(ctx, entry_distance + PRE_ROTATE_NUDGE_DISTANCE, ctx.articulation_root)
+    # [2026-07-26] PRE_ROTATE_NUDGE_DISTANCE 는 전진 진입 기준으로 "약간 초과주행 후 최종 회전으로
+    # 보정"하는 여유값이다 — reverse_entry 에서 그대로 더하면 초과주행 방향이 거치대 쪽이 되어(뒤로
+    # 더 파고듦) DOCK_STANDOFF 로 확보한 여유를 까먹는다. 후진 진입은 이 여유 없이 정확히
+    # entry_distance 만큼만 이동.
+    drive_distance = entry_distance if reverse_entry else entry_distance + PRE_ROTATE_NUDGE_DISTANCE
+    yield from g_drive_straight_open_loop(ctx, drive_distance, ctx.articulation_root,
+                                          reverse=reverse_entry)
     yield from g_rotate_in_place(ctx, chassis_goal_yaw, FINAL_ROTATE_KP, FINAL_ROTATE_KD, FINAL_ROTATE_W_MAX,
                                  FINAL_ROTATE_MAX_W_STEP, FINAL_ROTATE_TOLERANCE_RAD, ctx.articulation_root)
     if FINAL_NUDGE_DISTANCE > 0.0:
-        yield from g_drive_straight_open_loop(ctx, FINAL_NUDGE_DISTANCE, ctx.articulation_root)
-
-
-def g_caster_nudge(ctx, chassis_path, distance=DOCK_NUDGE_DISTANCE):
-    """짧게 전진→후진(같은 거리)해 캐스터 바퀴를 현재 주행축 방향으로 강제 정렬한 뒤 정밀 접근 시작."""
-    yield from g_drive_straight_open_loop(ctx, distance, chassis_path, speed=DOCK_NUDGE_SPEED)
-    yield from g_drive_straight_open_loop(ctx, distance, chassis_path, speed=DOCK_NUDGE_SPEED, reverse=True)
-
-
-def g_precise_dock_approach(ctx, goal_xy, goal_yaw, chassis_path, label="DOCK"):
-    """Nudge(캐스터 정렬) + One-Shot(정지→1회 측정→계산된 만큼만 이동, 이동 중 재측정 안 함)
-    최대 DOCK_ONESHOT_MAX_ITERS 회 반복 후 그 자리에서 최종 회전 정렬(15_/16_ 검증 패턴)."""
-    yield from g_caster_nudge(ctx, chassis_path)
-
-    for it in range(DOCK_ONESHOT_MAX_ITERS):
-        ctx.cmd_pub.publish(Twist())
-        for _ in range(DOCK_ONESHOT_SETTLE_STEPS):
-            yield
-        pos_xy = get_prim_world_position(chassis_path)[:2]
-        to_goal = goal_xy - pos_xy
-        dist = float(np.linalg.norm(to_goal))
-        if dist < DOCK_ONESHOT_POS_TOL:
-            break
-        bearing = float(np.arctan2(to_goal[1], to_goal[0]))
-        print(f"[DOCK:{label}][{ctx.name}] One-Shot 스캔 #{it + 1}: dist={dist:.3f}m "
-              f"bearing={np.degrees(bearing):.1f}도(이동 중 재측정 없음)")
-        yield from g_rotate_in_place(ctx, bearing, FINAL_ROTATE_KP, FINAL_ROTATE_KD, FINAL_ROTATE_W_MAX,
-                                     FINAL_ROTATE_MAX_W_STEP, FINAL_ROTATE_TOLERANCE_RAD, chassis_path)
-        yield from g_drive_straight_open_loop(ctx, dist, chassis_path, speed=DOCK_ONESHOT_DRIVE_SPEED)
-    else:
-        print(f"[DOCK:{label}][{ctx.name}][WARN] One-Shot {DOCK_ONESHOT_MAX_ITERS}회 반복 후에도 "
-              f"위치 허용치({DOCK_ONESHOT_POS_TOL}m) 미달 — 마지막 측정값으로 자세 정렬만 진행")
-
-    yield from g_rotate_in_place(ctx, goal_yaw, FINAL_ROTATE_KP, FINAL_ROTATE_KD, FINAL_ROTATE_W_MAX,
-                                 FINAL_ROTATE_MAX_W_STEP, FINAL_ROTATE_TOLERANCE_RAD, chassis_path)
-
-    final_pos = get_prim_world_position(chassis_path)[:2]
-    final_yaw = get_chassis_yaw(chassis_path)
-    print(f"[DOCK:{label}][{ctx.name}] 정밀 도킹 완료 pos={np.round(final_pos, 3).tolist()}"
-          f"(목표{goal_xy.tolist()}) yaw={np.degrees(final_yaw):.1f}도(목표{np.degrees(goal_yaw):.1f}도)")
+        yield from g_drive_straight_open_loop(ctx, FINAL_NUDGE_DISTANCE, ctx.articulation_root,
+                                              reverse=reverse_entry)
 
 
 def create_plug_at_world_pos(trash_can_path, world_pos, plug_name="grip_plug"):
@@ -1082,16 +1150,26 @@ def _pick_closest_entry(trash_origin_xy, from_xy):
 #  H. 툴체인지 제너레이터(15_/16_ 이식, ctx 만 참조)
 # ════════════════════════════════════════════════════════════════════════════
 def _tc_solve_and_ramp(ctx, ik, target_pos, target_ori, warm_start, ramp_steps, label,
-                       bias_compensation=None):
+                       bias_compensation=None, retries=TC_IK_RETRY_COUNT):
     """거치대는 고정 위치라 반응형 IK(RMPflow) 대신 "IK 1회 풀어 관절각 확정 → 램프"
     (15_ 실측: 반응형 IK 는 오래 돌수록 오히려 발산). position_tolerance=0.001 +
     TC_TARGET_BIAS_COMPENSATION(URDF-USD 형상 불일치 고정 바이어스 보정, TC_APPROACH_ORIENTATION
-    접근에만 유효). 반환 = (관절각 rad 6dof|None, ok)."""
+    접근에만 유효). 반환 = (관절각 rad 6dof|None, ok).
+    [2026-07-26] 챠시 위치 보정을 없앤 대신, IK 가 안 풀리는 경우 그 자리(챠시 이동 없음)에서
+    warm_start 를 바꿔가며 최대 retries 회 재시도(사용자 요청) — 같은 입력을 그대로 반복하면 결정론적
+    솔버라 100% 재실패하므로, warm_start 유무를 번갈아 써서 실제로 다른 해를 탐색하게 한다."""
     bias = bias_compensation if bias_compensation is not None else TC_TARGET_BIAS_COMPENSATION
     corrected_target = np.asarray(target_pos) - bias
-    q, ok = ik.compute_inverse_kinematics(
-        EE_FRAME, corrected_target, target_ori,
-        warm_start=warm_start, position_tolerance=0.001, orientation_tolerance=0.02)
+    q, ok = None, False
+    for attempt in range(retries + 1):
+        attempt_warm_start = warm_start if attempt % 2 == 0 else None
+        q, ok = ik.compute_inverse_kinematics(
+            EE_FRAME, corrected_target, target_ori,
+            warm_start=attempt_warm_start, position_tolerance=0.001, orientation_tolerance=0.02)
+        if ok:
+            break
+        if attempt < retries:
+            print(f"[TOOLCHANGE][{ctx.name}][WARN] {label} IK 실패(시도 {attempt + 1}/{retries + 1}) — 재시도")
     if not ok:
         print(f"[TOOLCHANGE][{ctx.name}][WARN] {label} IK 실패")
         return None, False
@@ -1179,6 +1257,7 @@ def g_tool_change_release(ctx):
     print(f"[TOOLCHANGE][{ctx.name}] 노즐 반납 {'성공' if release_ok else '실패'} + 재도킹 완료")
     yield from g_ramp_to_joint_positions(ctx, np.degrees(q_above), TC_JOINT_RAMP_STEPS)
     return release_ok
+
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -1406,11 +1485,14 @@ def g_spray_sweep(ctx, forward_distance=FORWARD_DISTANCE, max_steps=None):
 #  J. 트래시 미션(15_ carter2_mission 을 ctx-일반화 — 공용 쓰레기통 대상으로 어느 로봇이든 수행)
 # ════════════════════════════════════════════════════════════════════════════
 def g_trash_mission(ctx):
-    """공용 쓰레기통(TRASH_CAN_PRIM) 대상 PICK → DUMP → RETURN(원위치 복귀) → DOCK(자기 거치대
-    복귀) 4단계. 15_ carter2_mission 과 동일 로직이되:
-      · from_xy 를 고정 스폰좌표 대신 "지금 이 순간의 챠시 위치"로 계산(호출 시점이 스폰 직후라는
-        보장이 없어짐 — 작업 선택식이라 이 서브미션이 여러 번, 임의 위치에서 시작될 수 있음).
-      · DOCK 목적지 = ctx.dock_approach_xy/yaw(자기 전용 거치대 근처)로 통일.
+    """공용 쓰레기통(TRASH_CAN_PRIM) 대상 PICK → DUMP → RETURN(원위치 복귀) 3단계. 15_
+    carter2_mission 과 동일 로직이되 from_xy 를 고정 스폰좌표 대신 "지금 이 순간의 챠시 위치"로
+    계산(호출 시점이 스폰 직후라는 보장이 없어짐 — 작업 선택식이라 이 서브미션이 여러 번, 임의
+    위치에서 시작될 수 있음). [2026-07-26] 예전엔 끝에 노즐 거치대(ctx.dock_approach_xy)로 가는
+    "DOCK" 4번째 단계가 있었음 — 16_(carter2=trash 전담) 시절엔 "DOCK 복귀"가 곧 유일한 홈이라
+    문제없었지만, 17_에서 dock_approach_xy 가 "노즐 거치대"라는 별개 의미로 바뀌면서 trash 작업이
+    노즐을 전혀 안 쓰는데도 불필요하게 노즐 거치대를 거쳐갔다(사용자가 라이브에서 관찰해 발견) —
+    제거함. 진짜 최종 복귀는 상위 g_task_select_mission 의 g_nav_to_home 이 담당.
     끝에서 무한 유휴 대신 return(최상위 task_select 루프가 IDLE 을 담당)."""
     trash_xy = np.array(TRASH_SPAWN_FIXED)
     trash_origin_xy = trash_xy - TRASH_BBOX_CENTER_OFFSET_XY
@@ -1539,21 +1621,8 @@ def g_trash_mission(ctx):
     post_ret_yaw = wrap_pi(get_chassis_yaw(ctx.articulation_root) + np.pi)
     yield from g_rotate_in_place(ctx, post_ret_yaw, FINAL_ROTATE_KP, FINAL_ROTATE_KD, FINAL_ROTATE_W_MAX,
                                  FINAL_ROTATE_MAX_W_STEP, FINAL_ROTATE_TOLERANCE_RAD, ctx.articulation_root)
-    print(f"[APPROACH:RETURN][{ctx.name}] {POST_RETURN_BACKUP_DISTANCE:.2f}m 후진 + 180 회전 → DOCK 시작")
-
-    ctx.status = "DOCK: 자기 거치대 복귀"
-    dock_dir = np.array([np.cos(ctx.dock_approach_yaw), np.sin(ctx.dock_approach_yaw)])
-    dock_standoff_xy = ctx.dock_approach_xy - dock_dir * FINAL_APPROACH_DISTANCE
-    yield from g_run_nav_leg(ctx, dock_standoff_xy, ctx.dock_approach_yaw,
-                             ctx.dock_approach_xy, ctx.dock_approach_yaw, "DOCK")
-    if not simulation_app.is_running():
-        return
-    yield from g_precise_dock_approach(ctx, ctx.dock_approach_xy, ctx.dock_approach_yaw,
-                                       ctx.articulation_root, "DOCK")
-    if not simulation_app.is_running():
-        return
-
-    print(f"[INFO][{ctx.name}] 트래시 미션 완료(파지+덤프+원위치복귀+도킹).")
+    print(f"[APPROACH:RETURN][{ctx.name}] {POST_RETURN_BACKUP_DISTANCE:.2f}m 후진 + 180 회전 완료")
+    print(f"[INFO][{ctx.name}] 트래시 미션 완료(파지+덤프+원위치복귀).")
     ctx.status = "트래시 완료 — IDLE 복귀"
 
 
@@ -1577,12 +1646,14 @@ def g_with_resource(ctx, lock, resource_name, body_gen_fn):
 
 
 def g_nav_to_dock_approach(ctx, label="DOCK_APPROACH"):
-    """거치대 팔 작업(파지/반납) 전 챠시를 자기 전용 거치대 근처(ctx.dock_approach_xy/yaw)로 필요할
-    때만 nav-leg 이동시킨다(이미 위치·자세가 충분히 근접하면 생략 — 15_ 검증 패턴)."""
+    """거치대 팔 작업(파지/반납) 전 챠시를 자기 전용 거치대 근처(ctx.dock_approach_xy)로 필요할 때만
+    nav-leg 이동시킨다(이미 위치·자세가 충분히 근접하면 생략 — 15_ 검증 패턴). [2026-07-26] 팔이 챠시
+    뒤쪽에 달려있어(MOUNT_OFFSET) 후진으로 진입(reverse_entry=True)하면 팔↔노즐 거리가 짧아져 더 먼
+    DOCK_STANDOFF 를 쓸 수 있음(사용자 제안) — 최종 파킹 방향은 거치대 반대쪽(ctx.dock_park_yaw)."""
     cur_xy = get_prim_world_position(ctx.articulation_root)[:2]
     cur_yaw = get_chassis_yaw(ctx.articulation_root)
     xy_close = float(np.linalg.norm(cur_xy - ctx.dock_approach_xy)) < DOCK_APPROACH_SKIP_XY_RADIUS
-    yaw_close = abs(wrap_pi(cur_yaw - ctx.dock_approach_yaw)) < DOCK_APPROACH_SKIP_YAW_TOL
+    yaw_close = abs(wrap_pi(cur_yaw - ctx.dock_park_yaw)) < DOCK_APPROACH_SKIP_YAW_TOL
     if xy_close and yaw_close:
         print(f"[NAV:{label}][{ctx.name}] 이미 거치대 근처(dist="
               f"{np.linalg.norm(cur_xy - ctx.dock_approach_xy):.3f}m) — nav-leg 생략, 바로 팔 작업")
@@ -1595,11 +1666,30 @@ def g_nav_to_dock_approach(ctx, label="DOCK_APPROACH"):
     sync_rmpflow_base_pose(ctx)
     yield from g_stow_arm_for_nav(ctx)
     yield from g_run_nav_leg(ctx, dock_standoff_xy, ctx.dock_approach_yaw,
-                             ctx.dock_approach_xy, ctx.dock_approach_yaw, label)
+                             ctx.dock_approach_xy, ctx.dock_park_yaw, label, reverse_entry=True)
     if not simulation_app.is_running():
         return
-    yield from g_precise_dock_approach(ctx, ctx.dock_approach_xy, ctx.dock_approach_yaw,
-                                       ctx.articulation_root, label)
+    sync_rmpflow_base_pose(ctx)
+
+
+def g_nav_to_home(ctx, label="RETURN_HOME"):
+    """작업(trash/spray) 완료 후 원래 스폰지점(docking_station_1/02, ctx.home_xy/yaw)으로 복귀한다.
+    노즐 거치대 파킹지점(ctx.dock_approach_xy)과는 다른 위치 — 최종 유휴 위치는 항상 원래
+    docking_station 이어야 한다는 사용자 결정(2026-07-26)."""
+    cur_xy = get_prim_world_position(ctx.articulation_root)[:2]
+    cur_yaw = get_chassis_yaw(ctx.articulation_root)
+    xy_close = float(np.linalg.norm(cur_xy - ctx.home_xy)) < DOCK_APPROACH_SKIP_XY_RADIUS
+    yaw_close = abs(wrap_pi(cur_yaw - ctx.home_yaw)) < DOCK_APPROACH_SKIP_YAW_TOL
+    if xy_close and yaw_close:
+        print(f"[NAV:{label}][{ctx.name}] 이미 docking_station 근처 — nav-leg 생략")
+        return
+
+    home_dir = np.array([np.cos(ctx.home_yaw), np.sin(ctx.home_yaw)])
+    home_standoff_xy = ctx.home_xy - home_dir * FINAL_APPROACH_DISTANCE
+    ctx.status = f"{label}: docking_station 복귀"
+    sync_rmpflow_base_pose(ctx)
+    yield from g_stow_arm_for_nav(ctx)
+    yield from g_run_nav_leg(ctx, home_standoff_xy, ctx.home_yaw, ctx.home_xy, ctx.home_yaw, label)
     if not simulation_app.is_running():
         return
     sync_rmpflow_base_pose(ctx)
@@ -1647,6 +1737,7 @@ def g_task_select_mission(ctx, trash_lock, spray_lock):
                 yield from g_nav_to_dock_approach(ctx, "TRASH_PRE_RETURN")
                 yield from g_tool_change_release(ctx)
             yield from g_with_resource(ctx, trash_lock, "trash", lambda: g_trash_mission(ctx))
+            yield from g_nav_to_home(ctx, "TRASH_RETURN_HOME")
             print(f"[MISSION][{ctx.name}] 트래시 작업 완료 → IDLE 복귀")
 
         elif task == "spray":
@@ -1658,6 +1749,7 @@ def g_task_select_mission(ctx, trash_lock, spray_lock):
                     continue
             yield from g_with_resource(ctx, spray_lock, "spray", lambda: g_spray_mission_body(ctx))
             yield from g_tool_change_release(ctx)
+            yield from g_nav_to_home(ctx, "SPRAY_RETURN_HOME")
             print(f"[MISSION][{ctx.name}] 분사 작업 완료 → IDLE 복귀")
 
         else:
@@ -1719,9 +1811,11 @@ def main():
             c1_robot.initialize()
             c1_dof = list(c1_robot.dof_names)
             dp = c1_robot.get_joint_positions()
+            # [2026-07-26 사용자 요청] 스폰 직후 팔 초기자세를 STOW_Q 대신 실제 주행에 쓰는
+            # NAV_STOW_Q_DEG(무게중심 낮춤+챠시 근접, g_stow_arm_for_nav 와 동일)로 통일.
             for i, name in enumerate(ARM_JOINT_NAMES):
                 if name in c1_dof:
-                    dp[c1_dof.index(name)] = float(STOW_Q[i])
+                    dp[c1_dof.index(name)] = float(np.radians(NAV_STOW_Q_DEG[i]))
             c1_robot.set_joint_positions(dp)
             for _ in range(10):
                 my_world.step(render=True)
@@ -1743,7 +1837,8 @@ def main():
                               c1_gripper, C1_ARM_ROOT, C1_ARTICULATION_ROOT, ros_node, c1_goal_pub, c1_cmd_pub,
                               c1_pick_state, c1_task_state, NOZZLE_DOCK1_XY, NOZZLE_DOCK_HEIGHT,
                               DOCK1_APPROACH_XY, DOCK1_APPROACH_YAW, NOZZLE_TOOL_PATH_C1, NOZZLE_TCP_PATH_C1,
-                              NOZZLE_HOLD_JOINT_PATH_C1, NOZZLE_HOLD_ANCHOR_PATH_C1, SPRAY_WP1_XY, SPRAY_WP1_YAW)
+                              NOZZLE_HOLD_JOINT_PATH_C1, NOZZLE_HOLD_ANCHOR_PATH_C1, SPRAY_WP1_XY, SPRAY_WP1_YAW,
+                              HOME1_XY, HOME1_YAW, DOCK1_PARK_YAW)
             c1_ctx.tool_changer = c1_tool_changer
             _selftest_c1 = os.environ.get("SELFTEST_TASK_C1", "").strip().lower()
             if _selftest_c1 in ("spray", "trash"):
@@ -1755,9 +1850,11 @@ def main():
             c2_robot.initialize()
             c2_dof = list(c2_robot.dof_names)
             dp = c2_robot.get_joint_positions()
-            for name in ARM_JOINT_NAMES:
+            # [2026-07-26 사용자 요청] 스폰 직후 팔 초기자세를 전부-0 대신 실제 주행에 쓰는
+            # NAV_STOW_Q_DEG로 통일(carter1 과 동일 값).
+            for i, name in enumerate(ARM_JOINT_NAMES):
                 if name in c2_dof:
-                    dp[c2_dof.index(name)] = 0.0
+                    dp[c2_dof.index(name)] = float(np.radians(NAV_STOW_Q_DEG[i]))
             c2_robot.set_joint_positions(dp)
             for _ in range(10):
                 my_world.step(render=True)
@@ -1779,7 +1876,8 @@ def main():
                               c2_gripper, C2_ARM_ROOT, C2_ARTICULATION_ROOT, ros_node, c2_goal_pub, c2_cmd_pub,
                               c2_pick_state, c2_task_state, NOZZLE_DOCK2_XY, NOZZLE_DOCK_HEIGHT,
                               DOCK2_APPROACH_XY, DOCK2_APPROACH_YAW, NOZZLE_TOOL_PATH_C2, NOZZLE_TCP_PATH_C2,
-                              NOZZLE_HOLD_JOINT_PATH_C2, NOZZLE_HOLD_ANCHOR_PATH_C2, SPRAY_WP1_XY, SPRAY_WP1_YAW)
+                              NOZZLE_HOLD_JOINT_PATH_C2, NOZZLE_HOLD_ANCHOR_PATH_C2, SPRAY_WP1_XY, SPRAY_WP1_YAW,
+                              HOME2_XY, HOME2_YAW, DOCK2_PARK_YAW)
             c2_ctx.tool_changer = c2_tool_changer
             _selftest_c2 = os.environ.get("SELFTEST_TASK_C2", "").strip().lower()
             if _selftest_c2 in ("spray", "trash"):

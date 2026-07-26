@@ -42,9 +42,10 @@ from commander.hmi_link import HmiLink
 # 제너릭 포워더를 namespace:=carter1 로 띄워 쓰므로, namespace 별 시작pose를 따로 둔다.
 # 미등록 namespace 는 기존 기본값(carter2 좌표)로 안전하게 폴백(하위호환, 13_/16_/기존 배선 무영향).
 CARTER_START_POSES = {
-    "": (16.66290495232035, -0.0029517927591273807, 0.0),        # 기존 기본값(변경 없음)
-    "carter2": (16.66290495232035, -0.0029517927591273807, 0.0),
-    "carter1": (18.5, 0.0, 0.0),   # 17_ C1_START_POSE(docking_station_1)와 일치
+    "": (16.66290495232035, -0.0029517927591273807, 0.0),        # 기존 기본값(변경 없음, 13_/14_/16_)
+    "carter2": (16.66290495232035, -0.0029517927591273807, 0.0),  # 13_/14_/16_ 도 공용 — yaw 못 바꿈,
+                                                                    # 17_ 은 -p start_yaw_deg:=90.0 오버라이드로 대응
+    "carter1": (18.5, 0.2317, 90.0),   # namespace='carter1' 은 17_ 전용이라 직접 수정 안전. 17_ C1_START_POSE 와 일치
 }
 
 NAV_GOAL_TOPIC = "/trash_can_nav_goal"
@@ -102,6 +103,20 @@ def main():
     print(f"[NS] namespace='{ns or '(none)'}' → goal_sub='{goal_topic}', pick_pub='{pick_topic}'")
 
     start_pose = CARTER_START_POSES.get(ns, CARTER_START_POSES[""])
+    # [2026-07-26 17_ 후진진입 도킹 대응] CARTER_START_POSES 는 13_/14_/16_ 도 같이 쓰는 공용
+    # 테이블이라(그쪽 carter2 는 여전히 x,y,yaw=기존값 스폰) 테이블 값 자체를 못 바꾼다 — 대신
+    # 선택적 파라미터로 x/y/yaw 를 오버라이드. 안 주면(기본 sentinel) 테이블 값 그대로.
+    nav.declare_parameter("start_x", float("nan"))
+    nav.declare_parameter("start_y", float("nan"))
+    nav.declare_parameter("start_yaw_deg", float("nan"))
+    x_override = float(nav.get_parameter("start_x").value)
+    y_override = float(nav.get_parameter("start_y").value)
+    yaw_override = float(nav.get_parameter("start_yaw_deg").value)
+    start_pose = (
+        start_pose[0] if math.isnan(x_override) else x_override,
+        start_pose[1] if math.isnan(y_override) else y_override,
+        start_pose[2] if math.isnan(yaw_override) else yaw_override,
+    )
     print(f"[NS] namespace='{ns or '(none)'}' → AMCL 초기pose={start_pose}")
     init_pose = create_pose(nav, *start_pose)
     nav.setInitialPose(init_pose)
