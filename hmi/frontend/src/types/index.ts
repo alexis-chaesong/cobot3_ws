@@ -68,8 +68,9 @@ export interface RobotSnapshot {
   updatedAt: string;
 }
 
-/** 로그/이력 항목 (REST /api/history, /api/errors 응답) */
-export interface LogEntry {
+/** 로그/이력 항목 — 로봇 쪽 이벤트(REST /api/history, /api/errors 응답). */
+export interface RobotLogEntry {
+  kind: "robot";
   id: string;
   robotId: RobotId;
   level: "info" | "error";
@@ -77,10 +78,29 @@ export interface LogEntry {
   timestamp: string;
 }
 
-/** 큐 상태 항목 */
+/**
+ * 관리자가 UI(프론트엔드)에서 명령(통합/개별 시작·긴급정지·자유클릭 내비 이동 등)을
+ * 선택할 때마다 클라이언트에서 즉시 기록되는 로그. lib/uiActionLog.ts 가 적재.
+ */
+export interface UiActionLogEntry {
+  kind: "ui";
+  id: string;
+  targetLabel: string; // 대상 표시명 (예: "소독 로봇 (carter1)", "전체")
+  level: "info";
+  message: string; // 예: "통합 시작을 선택함"
+  timestamp: string;
+}
+
+/** 로그/이력 항목 (LogPanel 이 표시하는 통합 타입) */
+export type LogEntry = RobotLogEntry | UiActionLogEntry;
+
+/**
+ * 큐 상태 항목 — routeQueue.ts(웨이포인트 경로)에서 유도됨. carter1/carter2 웨이포인트를
+ * 표시해야 해서 RobotId 대신 색 분기 키(variant)를 직접 들고 있다.
+ */
 export interface QueueItem {
   taskId: string;
-  robotId: RobotId;
+  variant: "waste" | "disinfect";
   label: string;
   status: "queued" | "active" | "done";
 }
