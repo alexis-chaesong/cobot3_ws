@@ -84,4 +84,25 @@ export const commands = {
     );
     return sendNavGoal(robotId, x, y, yaw);
   },
+
+  /**
+   * [HMI v2 신규] 수동제어 시작 — 해당 로봇의 진행 중 작업을 즉시 중단(19_ 가 IDLE 로 비켜섬).
+   * routeQueue 가 "경로 시작" 시 1회 호출(웨이포인트마다 아님). 로그는 routeQueue/버튼 쪽에서 남김.
+   */
+  manualOverride: (carterId: CarterId) => {
+    return MOCK
+      ? (logMock("manualOverride", carterId), Promise.resolve(null))
+      : apiClient.post(`/api/commands/manual-override/${carterId}`);
+  },
+
+  /**
+   * [HMI v2 신규] 도킹스테이션 복귀 + 작업 초기화. carterId 생략 시 "all"(두 로봇 모두).
+   * 수동 경로 완료 시(routeQueue 자동) 또는 "도킹 복귀" 버튼에서 호출.
+   */
+  dockReturn: (carterId?: CarterId) => {
+    logUiAction(carterId ? CARTER_META[carterId].label : "전체", "도킹 복귀(작업 초기화)를 선택함");
+    return MOCK
+      ? (logMock("dockReturn", carterId ?? "all"), Promise.resolve(null))
+      : apiClient.post(`/api/commands/dock/${carterId ?? "all"}`);
+  },
 };

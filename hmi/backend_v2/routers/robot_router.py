@@ -67,6 +67,10 @@ async def start_all() -> CommandResult:
     """[HMI v2 재해석] task-select 모델엔 "대기 중인 미션을 시작"이라는 별도 게이트가 없다
     (task_select 발행 자체가 시작 트리거). "통합 시작" = 두 로봇에 기본 작업 조합을 한번에
     발행(사용자 결정 — 기존 관행 disinfect=carter1/waste=carter2 를 기본값으로 유지)."""
+    # ★긴급정지 해제(resume) 겸용★ : 19_ 은 estop 을 /robot/command 의 "START" 로만 푼다(task_select
+    #   는 별개 토픽이라 estop 을 안 풂). backend 가 START 를 아예 안 보내면 한번 긴급정지하면 영영
+    #   못 풀리므로, "통합 시작" 이 START(estop 해제) 를 겸하도록 먼저 발행 후 기본 작업을 배정한다.
+    bridge_manager.publish_command("START", robot_id=None)   # 두 로봇 estop 해제
     for carter_id, task in DEFAULT_TASK_ASSIGNMENT.items():
         bridge_manager.publish_task_select(carter_id, task)
     return CommandResult(result="SUCCESS")
@@ -148,6 +152,30 @@ async def navigate(robot_id: str, payload: NavigateRequest) -> CommandResult:
     ok = bridge_manager.publish_nav_goal(robot_id, payload.x, payload.y, payload.yaw)
     if not ok:
         raise HTTPException(status_code=503, detail="goal publisher 미초기화")
+    return CommandResult(result="SUCCESS", robot_id=robot_id)
+
+
+@router.post("/commands/manual-override/{robot_id}", response_model=CommandResult)
+async def manual_override(robot_id: str) -> CommandResult:
+    """[HMI v2] 운영자 수동제어 시작 — 해당 로봇의 진행 중 작업을 즉시 중단시킨다(19_ 가 작업
+    제너레이터를 버리고 IDLE 로 비켜서, 이후 navigate(goal_pose)를 Nav2 가 바로 주행). 프론트가
+    '경로 시작' 시 1회 호출(웨이포인트마다 아님)."""
+    if robot_id not in CARTER_IDS:
+        raise HTTPException(status_code=404, detail=f"알 수 없는 robot_id: {robot_id}")
+    bridge_manager.publish_command("MANUAL_OVERRIDE", robot_id=robot_id)
+    return CommandResult(result="SUCCESS", robot_id=robot_id)
+
+
+@router.post("/commands/dock/{robot_id}", response_model=CommandResult)
+async def dock_return(robot_id: str) -> CommandResult:
+    """[HMI v2] 도킹스테이션 복귀 + 작업 초기화. robot_id='all' 이면 두 로봇 모두.
+    수동제어 경로 완료 시(프론트가 자동 호출) 또는 '도킹 복귀' 버튼에서 호출."""
+    if robot_id == "all":
+        bridge_manager.publish_command("DOCK_RETURN", robot_id=None)
+        return CommandResult(result="SUCCESS", robot_id=None)
+    if robot_id not in CARTER_IDS:
+        raise HTTPException(status_code=404, detail=f"알 수 없는 robot_id: {robot_id}")
+    bridge_manager.publish_command("DOCK_RETURN", robot_id=robot_id)
     return CommandResult(result="SUCCESS", robot_id=robot_id)
 
 

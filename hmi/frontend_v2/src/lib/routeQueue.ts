@@ -16,7 +16,7 @@
 // ══════════════════════════════════════════════════════════════
 
 import { CARTER_IDS, CARTER_META } from "../constants/carters";
-import { sendNavGoal } from "./commands";
+import { sendNavGoal, commands } from "./commands";
 import { logUiAction } from "./uiActionLog";
 import { subscribeRobotPoseStore } from "./robotPoseStore";
 import { MOCK } from "./mock/mockSocket";
@@ -128,8 +128,11 @@ function advance(carterId: CarterId) {
     setRoute(carterId, next);
     dispatchLeg(carterId, next[nextIdx]);
   } else {
+    // ★수동 경로 완료★ → 즉시 도킹스테이션 복귀 + 작업 초기화(19_ 가 처리). 단발 클릭(1지점)도 동일.
     setRoute(carterId, next);
     stopPoseWatchIfIdle();
+    if (!MOCK) void commands.dockReturn(carterId);
+    logUiAction(CARTER_META[carterId].label, "수동 경로 완료 → 도킹 복귀");
   }
 }
 
@@ -151,6 +154,9 @@ export function enqueueRoute(
     CARTER_META[carterId].label,
     `경로 이동 시작을 선택함 (${waypoints.length}개 지점)`,
   );
+  // ★수동제어 시작★ → 진행 중이던 작업을 19_ 가 즉시 중단하도록 통지(경로당 1회). 이후 각 웨이포인트는
+  //   sendNavGoal(goal_pose)로 Nav2 가 주행(19_ 는 IDLE 로 비켜섬).
+  if (!MOCK) void commands.manualOverride(carterId);
   setRoute(carterId, waypoints);
   dispatchLeg(carterId, waypoints[0]);
 }

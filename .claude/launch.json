@@ -6,6 +6,12 @@
       "runtimeExecutable": "npm",
       "runtimeArgs": ["--prefix", "hmi/frontend", "run", "dev"],
       "port": 5173
+    },
+    {
+      "name": "hmi-frontend-v2",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["--prefix", "hmi/frontend_v2", "run", "dev"],
+      "port": 5174
     }
   ]
 }

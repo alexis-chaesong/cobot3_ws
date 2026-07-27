@@ -12,9 +12,31 @@
   border-bottom: 1px solid var(--border);
 }
 
+.map-panel__head-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
 .map-panel__toggle {
   display: flex;
   gap: 8px;
+}
+
+.map-panel__dock-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 6px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface-page);
+  cursor: pointer;
+}
+.map-panel__dock-btn:hover {
+  background: var(--surface-raised, #1a2329);
 }
 
 .map-panel__toggle-btn {
@@ -51,6 +73,9 @@
   display: block;
   cursor: crosshair;
 }
+.map-panel__canvas--locked {
+  cursor: not-allowed;
+}
 
 .map-panel__placeholder {
   position: absolute;
@@ -77,6 +102,9 @@
   margin: 0;
   font-size: 12px;
   color: var(--ink-muted);
+}
+.map-panel__hint--locked {
+  color: var(--state-error);
 }
 
 .map-panel__route-status {

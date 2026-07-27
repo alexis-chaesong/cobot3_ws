@@ -85,7 +85,7 @@ from pathlib import Path
 import numpy as np
 import omni.usd
 import omni.timeline
-from pxr import Usd, UsdGeom, UsdPhysics, Sdf, Gf, Vt
+from pxr import Usd, UsdGeom, UsdPhysics, UsdLux, Sdf, Gf, Vt
 
 from isaacsim.core.api import World
 from isaacsim.core.utils.types import ArticulationAction
@@ -752,6 +752,14 @@ def build_env():
         simulation_app.update()
     print(f"[LOAD] hospital env = {HOSPITAL_USD}")
 
+    # ★조명 기본값★ : hospital 자체 조명이 약해 시작 시 씬이 어둡다 → DomeLight 로 기본 조명 보강.
+    #   실제 씬 라이트라 뷰포트 "Lighting Mode" 설정과 무관하게 항상 밝게 나온다(15_ 선례 동일 패턴).
+    light_path = "/World/DefaultDomeLight"
+    if not stage.GetPrimAtPath(light_path).IsValid():
+        dome = UsdLux.DomeLight.Define(stage, light_path)
+        dome.CreateIntensityAttr(500.0)
+        print(f"[LIGHT] 기본 조명 보강: {light_path} (intensity 500)")
+
 
 def _place_xform(prim_path, x, y, z, yaw_deg):
     stage = omni.usd.get_context().get_stage()
@@ -1177,7 +1185,12 @@ class RobotCtx:
         self.status = "시작 대기"
         self.tool_changer = None            # ToolChangerController, main() 이 주입
         self.holding_nozzle = False
+        self.holding_trash = False          # [HMI v2] g_trash_mission 파지~반납 사이 True — 도킹복귀
+                                             # 시 쓰레기통 원위치 반납 판단에 사용(g_return_dock_and_reset)
         self.nozzle_tip_offset = None       # link_6 기준 nozzle_tcp 상대위치(3축) — 파지 직후 실측
+        self.spray_fx = None                # [HMI v2] g_spray_sweep 이 생성한 SprayFX 참조 — 수동제어/
+                                             # 도킹복귀/긴급정지로 스윕 제너레이터가 중간에 버려져도
+                                             # (return 경로를 못 타 자체 clear() 가 안 불림) 밖에서 정리 가능하게
         # [19_ 병합] __init__ 시그니처는 안 건드리고(사용자 결정) 기본값만 두고, main() 이 RobotCtx
         # 생성 직후 tool_changer 와 동일한 패턴으로 별도 대입한다.
         self.person_gate = None    # PersonGate 인스턴스(YOLO 사람회피) — main() 이 생성 후 주입
@@ -1211,6 +1224,15 @@ def sync_rmpflow_base_pose(ctx):
     ctx.rmpflow.rmp_flow.set_robot_base_pose(robot_position=pos, robot_orientation=ori)
 
 
+def _estop_hold(ctx):
+    """★긴급정지 시 팔 즉시 정지★ : estop 동안 새 관절/EE 목표를 적용하지 않고(=마지막 명령 자세를
+    articulation PD 가 그대로 유지) 스텝 진행을 멈춘 채 대기한다. 해제되면 반환 → 호출한 팔 램프가
+    멈췄던 자리에서 이어서 진행(램프 step 을 소비하지 않으므로 재개 시 자세 점프 없음).
+    ctx.estop_flags 가 None(HMI 미연결)이면 즉시 통과."""
+    while ctx.estop_flags is not None and ctx.estop_flags.get(ctx.name, False):
+        yield
+
+
 def g_ramp_to_joint_positions(ctx, target_joints_deg, ramp_steps):
     start = ctx.robot.get_joint_positions().copy()
     target = start.copy()
@@ -1219,6 +1241,7 @@ def g_ramp_to_joint_positions(ctx, target_joints_deg, ramp_steps):
         target[idx] = rad
     for step in range(ramp_steps):
         yield
+        yield from _estop_hold(ctx)          # ★긴급정지 시 팔 정지·대기★
         alpha = (step + 1) / ramp_steps
         wp = start + _smoothstep(alpha) * (target - start)
         ctx.robot.apply_action(ArticulationAction(joint_positions=wp))
@@ -1228,6 +1251,7 @@ def g_ramp_ee_target(ctx, target_position, target_orientation, ramp_steps):
     start = get_prim_world_position(ctx.tool0_path)
     for step in range(ramp_steps):
         yield
+        yield from _estop_hold(ctx)          # ★긴급정지 시 팔 정지·대기★
         alpha = (step + 1) / ramp_steps
         wp = start + _smoothstep(alpha) * (target_position - start)
         ctx.robot.apply_action(ctx.rmpflow.forward(
@@ -1247,6 +1271,7 @@ def g_move_to_pose(ctx, target_position, target_orientation, label, max_linear_s
     base_tol = position_tolerance if position_tolerance is not None else POSITION_TOLERANCE
     for step in range(steps_budget):
         yield
+        yield from _estop_hold(ctx)          # ★긴급정지 시 팔 정지·대기★
         ee = get_prim_world_position(ctx.tool0_path)
         ctx.robot.apply_action(ctx.rmpflow.forward(
             target_end_effector_position=target_position, target_end_effector_orientation=target_orientation))
@@ -1362,6 +1387,16 @@ def g_run_nav_leg(ctx, standoff_xy, standoff_yaw, chassis_goal_xy, chassis_goal_
     ctx.status = f"{label}: Nav2 이동 대기(nav_goal 발행중, start_pick 기다림)"
     while not ctx.pick_state["start"]:
         yield
+        # ★긴급정지(어떤 상황에서든 정지)★ : 이 구간은 Nav2 가 로봇을 몰아(스크립트 cmd_vel 아님)
+        #   여기서 직접 못 멈춘다 → (1)standoff goal 재발행을 멈추고 (2)cmd_vel 0 을 발행해 즉시
+        #   정지시키며 (3)미션 릴레이(trash_can_nav_pick_mission)가 /robot/command 로 진행 중 Nav2
+        #   goal 을 취소하게 둔다. estop 해제 시 goal 재발행 재개 → Nav2 재주행. (person 은 이 구간에선
+        #   costmap 이 알아서 우회하므로 게이팅 안 함 — 설계상 estop 만.)
+        if ctx.estop_flags is not None and ctx.estop_flags.get(ctx.name, False):
+            ctx.cmd_pub.publish(Twist())
+            if not simulation_app.is_running():
+                return
+            continue
         st = float(ctx.world.current_time)
         goal.header.stamp.sec = int(st)
         goal.header.stamp.nanosec = int(round((st - int(st)) * 1e9))
@@ -1690,6 +1725,7 @@ def g_spray_sweep(ctx, forward_distance=FORWARD_DISTANCE, max_steps=None):
     sweeper = Sweeper(-1.0, 1.0, S_CRUISE, S_ACCEL, PHYSICS_DT, S_HOLD_STEPS)
     q_hold = q_of_s(-1.0)
     spray_fx = SprayFX(stage) if SPRAY_FX_ON else None
+    ctx.spray_fx = spray_fx  # [HMI v2] 밖(g_return_dock_and_reset 등)에서도 정리할 수 있게 노출
 
     def apply(q_target):
         nonlocal q_applied
@@ -1871,11 +1907,13 @@ def g_trash_mission(ctx):
         current_target = current_target + move_dir * CREEP_STEP_SIZE
         for _ in range(CREEP_SETTLE_STEPS):
             yield
+            yield from _estop_hold(ctx)      # ★긴급정지 시 팔 정지·대기★
             ctx.robot.apply_action(ctx.rmpflow.forward(
                 target_end_effector_position=current_target, target_end_effector_orientation=grasp_orientation))
         ctx.gripper.close()
         if ctx.gripper.is_closed():
             gripped_ok = True
+            ctx.holding_trash = True   # [HMI v2] 도킹복귀 시 원위치 반납 판단용
             print(f"[INFO][{ctx.name}] 파지 성공 (creep {creep_step + 1})")
             break
     grasp_position = current_target
@@ -1938,6 +1976,7 @@ def g_trash_mission(ctx):
                               growing_tolerance_max=RETURN_PLACE_GROWING_TOLERANCE_MAX)
     yield from g_hold_pose(ctx, grasp_position, grasp_orientation, GRASP_HOLD_STEPS)
     ctx.gripper.open()
+    ctx.holding_trash = False   # [HMI v2]
     for _ in range(GRASP_HOLD_STEPS):
         yield
     print(f"[INFO][{ctx.name}] Surface Gripper 개방 (is_closed={ctx.gripper.is_closed()})")
@@ -2095,6 +2134,77 @@ def g_task_select_mission(ctx, trash_lock, spray_lock):
             print(f"[MISSION][{ctx.name}][WARN] 알 수 없는 task '{task}' — 무시")
 
 
+def g_return_trash_can(ctx):
+    """[HMI v2] 도킹복귀 시 쓰레기통을 쥔 채(ctx.holding_trash=True) 중단됐으면 원위치
+    (TRASH_SPAWN_FIXED)에 갖다 놓는다. g_trash_mission 의 PICK 접근·RETURN 내려놓기와 동일한
+    빌딩블록(TARGET_JOINTS_DEG 고정 관절목표, _pick_closest_entry, g_move_to_pose 등)을 재사용
+    하되, 원래 파지 시 실측했던 정밀 grasp_position 은 그 제너레이터가 버려지며 함께 사라졌으므로
+    (g_trash_mission 은 도킹복귀에 의해 통째로 교체됨) 여기서 TARGET_JOINTS_DEG 도달 직후 다시
+    실측한 tool0 pose 를 내려놓기 목표로 쓴다. 좌우보정(LATERAL_CORRECTION)은 원래 "쥐기 전에
+    쓰레기통 실측 위치"와 비교하는 로직인데, 지금은 쓰레기통이 그리퍼에 붙어 함께 움직이는
+    중이라 그 비교 자체가 무의미해 생략한다."""
+    trash_xy = np.array(TRASH_SPAWN_FIXED)
+    trash_origin_xy = trash_xy - TRASH_BBOX_CENTER_OFFSET_XY
+    from_xy = get_prim_world_position(ctx.articulation_root)[:2]
+    chassis_goal_xy, chassis_goal_yaw = _pick_closest_entry(trash_origin_xy, from_xy)
+    approach_dir = rotate_2d(OFFSET_TRASH_FROM_CHASSIS / np.linalg.norm(OFFSET_TRASH_FROM_CHASSIS), chassis_goal_yaw)
+    standoff_xy = chassis_goal_xy - approach_dir * FINAL_APPROACH_DISTANCE
+    standoff_yaw = float(np.arctan2(approach_dir[1], approach_dir[0]))
+
+    ctx.status = "TRASH_RECOVER: 쓰레기통 원위치 복귀 이동"
+    sync_rmpflow_base_pose(ctx)
+    yield from g_run_nav_leg(ctx, standoff_xy, standoff_yaw, chassis_goal_xy, chassis_goal_yaw, "TRASH_RECOVER")
+    if not simulation_app.is_running():
+        return
+    sync_rmpflow_base_pose(ctx)
+
+    ctx.status = "TRASH_RECOVER: 내려놓기"
+    yield from g_ramp_to_joint_positions(ctx, TARGET_JOINTS_DEG, JOINT_RAMP_STEPS)
+    for _ in range(GRASP_HOLD_STEPS):
+        yield
+    place_position = get_prim_world_position(ctx.tool0_path)
+    place_orientation = get_world_orientation_wxyz(ctx.tool0_path)
+    yield from g_move_to_pose(ctx, place_position, place_orientation, "원위치 내려놓기",
+                              growing_tolerance_max=RETURN_PLACE_GROWING_TOLERANCE_MAX)
+    yield from g_hold_pose(ctx, place_position, place_orientation, GRASP_HOLD_STEPS)
+    ctx.gripper.open()
+    ctx.holding_trash = False
+    for _ in range(GRASP_HOLD_STEPS):
+        yield
+    print(f"[TRASH_RECOVER][{ctx.name}] Surface Gripper 개방 (is_closed={ctx.gripper.is_closed()})")
+    retract_target = place_position + LIFT_OFFSET
+    yield from g_move_to_pose(ctx, retract_target, place_orientation, "내려놓은 후 후퇴")
+    yield from g_hold_pose(ctx, retract_target, place_orientation, GRASP_HOLD_STEPS)
+    yield from g_stow_arm_for_nav(ctx)
+    for _ in range(GRASP_HOLD_STEPS):
+        yield
+    print(f"[TRASH_RECOVER][{ctx.name}] 쓰레기통 원위치 복귀 완료")
+
+
+def g_return_dock_and_reset(ctx):
+    """[HMI v2] 수동제어 종료(경로 끝) / '도킹 복귀' 버튼 → 진행 중이던 작업을 버리고 도킹스테이션
+    (HOME)으로 복귀하면서 작업 상태를 초기화한다. 노즐을 쥐고 있으면 거치대에 반납, 쓰레기통을
+    쥐고 있으면 원위치에 반납 후 복귀(깨끗한 초기화). 완료 후 호출부(main)가 정상 FSM(IDLE)으로
+    되돌린다."""
+    ctx.status = "DOCK_RETURN: 도킹 복귀 + 작업 초기화"
+    publish_hmi_state(ctx, "복귀")
+    ctx.cmd_pub.publish(Twist())          # 진행 중이던 스크립트 주행 즉시 정지
+    if ctx.spray_fx is not None:
+        ctx.spray_fx.clear()   # [HMI v2] 스윕 중 도킹복귀로 끊겼으면 뜬 파티클 정리
+    yield from g_stow_arm_for_nav(ctx)
+    if ctx.holding_nozzle:
+        print(f"[DOCK_RETURN][{ctx.name}] 노즐 보유 중 → 거치대 반납 후 복귀")
+        yield from g_nav_to_dock_approach(ctx, "DOCK_RETURN_RELEASE")
+        yield from g_tool_change_release(ctx)
+    if ctx.holding_trash:
+        print(f"[DOCK_RETURN][{ctx.name}] 쓰레기통 보유 중 → 원위치 반납 후 복귀")
+        yield from g_return_trash_can(ctx)
+    yield from g_nav_to_home(ctx, "DOCK_RETURN_HOME")
+    ctx.task_select_state["task"] = None  # 작업 초기화
+    ctx.pick_state["start"] = False
+    print(f"[DOCK_RETURN][{ctx.name}] 도킹 복귀 완료 → 작업 초기화, IDLE")
+
+
 # ════════════════════════════════════════════════════════════════════════════
 #  L. main — 두 로봇 협조 루프
 # ════════════════════════════════════════════════════════════════════════════
@@ -2126,6 +2236,29 @@ def main():
     c1_rs_path = build_realsense(C1_CHASSIS, C1_RS_PRIM, RS_OFFSET, RS_FOCAL, "carter1") if en_c1 else None
     c2_rs_path = build_realsense(C2_CHASSIS, C2_RS_PRIM, RS_OFFSET, RS_FOCAL, "carter2") if en_c2 else None
 
+    # [2026-07-27 버그 수정] Camera() 래퍼 자체도 reset() 전에 만들어야 한다(14_1/18_ 이 실제로
+    # 하던 순서) — 이 파일은 그동안 prim만 reset 전에 만들고 Camera(...) 생성은 reset 후로
+    # 옮겨져 있었다. isaacsim Camera 래퍼는 생성 시점에 render product 를 현재 렌더 파이프라인
+    # 상태에 등록하는데, reset() 이 그 상태를 갈아엎은 뒤 등록하면 render product 가 카메라와
+    # 제대로 안 붙어 cam.get_rgb() 가 계속 None/구값만 반환할 수 있다(예외 없이 조용히 실패 —
+    # 웹 비전 패널이 "YOLO 인식엔 문제 없어 보이는데 화면만 안 뜨는" 것처럼 보이는 근본 원인).
+    c1_rs_cam = None
+    if c1_rs_path is not None:
+        try:
+            c1_rs_cam = Camera(prim_path=c1_rs_path, name="c1_realsense",
+                               resolution=RS_RESOLUTION, frequency=30)
+        except Exception:
+            print("[RS][carter1][WARN] Camera 래퍼 생성 실패 — 비활성 처리")
+            c1_rs_cam = None
+    c2_rs_cam = None
+    if c2_rs_path is not None:
+        try:
+            c2_rs_cam = Camera(prim_path=c2_rs_path, name="c2_realsense",
+                               resolution=RS_RESOLUTION, frequency=30)
+        except Exception:
+            print("[RS][carter2][WARN] Camera 래퍼 생성 실패 — 비활성 처리")
+            c2_rs_cam = None
+
     c1_robot = c1_ee_path = c1_tool0_path = None
     if en_c1:
         setup_nozzle_surface_gripper(stage, C1_ARM_ROOT, C1_EE_LINK_NAME, C1_SURFACE_GRIPPER, "carter1")
@@ -2143,13 +2276,10 @@ def main():
     for _ in range(5):
         my_world.step(render=False)
 
-    # ★YOLO 병합★ reset 이후 카메라 래핑+초기화(render product 준비). 실패해도 해당 로봇만
-    # None 폴백 — 다른 로봇/미션 진행에는 영향 없음(18_ 관례).
-    c1_rs_cam = None
-    if c1_rs_path is not None:
+    # ★YOLO 병합★ reset 이후엔 초기화+워밍업만(래퍼는 위에서 이미 reset 전에 생성됨). 실패해도
+    # 해당 로봇만 None 폴백 — 다른 로봇/미션 진행에는 영향 없음(18_ 관례).
+    if c1_rs_cam is not None:
         try:
-            c1_rs_cam = Camera(prim_path=c1_rs_path, name="c1_realsense",
-                               resolution=RS_RESOLUTION, frequency=30)
             c1_rs_cam.initialize()
             for _ in range(30):
                 my_world.step(render=True)
@@ -2157,11 +2287,8 @@ def main():
         except Exception:
             print("[RS][carter1][WARN] 카메라 초기화 실패 — 비활성 처리")
             c1_rs_cam = None
-    c2_rs_cam = None
-    if c2_rs_path is not None:
+    if c2_rs_cam is not None:
         try:
-            c2_rs_cam = Camera(prim_path=c2_rs_path, name="c2_realsense",
-                               resolution=RS_RESOLUTION, frequency=30)
             c2_rs_cam.initialize()
             for _ in range(30):
                 my_world.step(render=True)
@@ -2183,6 +2310,10 @@ def main():
     #   (19_에서는 이 직접 매핑이 주 경로 — 역할고정이 아니므로 disinfect/waste 고정 매핑은 의미가
     #   약해짐, 향후 HMI UI 갱신 시 carter1/carter2 직접 지정으로 전환 권장·이 파일 범위 밖).
     estop_flags = {"carter1": False, "carter2": False}
+    # ★HMI v2 수동제어/도킹복귀★ : main 루프가 이 값을 보고 해당 로봇의 제너레이터를 즉시 교체한다.
+    #   "manual" = 작업 즉시 중단 후 IDLE(비켜서기) → 운영자가 /carterN/goal_pose(Nav2)로 직접 주행.
+    #   "dock"   = 작업 중단 + 도킹스테이션 복귀 + 작업 초기화(g_return_dock_and_reset).
+    override_cmd = {"carter1": None, "carter2": None}
 
     def _on_hmi_command(msg):
         try:
@@ -2195,14 +2326,36 @@ def main():
                   "carter1": ["carter1"], "carter2": ["carter2"],
                   None: ["carter1", "carter2"]}
         targets = id_map.get(rid, [])
+        ctx_by_name = {"carter1": c1_ctx, "carter2": c2_ctx}  # 호출 시점 최신값(클로저, c1_ctx/c2_ctx 는 아래서 나중에 대입돼도 OK)
         if cmd == "EMERGENCY_STOP":
             for t in targets:
                 estop_flags[t] = True
+                tctx = ctx_by_name.get(t)
+                if tctx is not None:
+                    # [HMI v2] 웹이 "지금 긴급정지 중"을 구분할 수 있는 유일한 신호 — 이게 없으면
+                    # process_state 는 정지 직전 라벨에 그대로 멈춰있어 프론트가 estop 상태를 못 봄
+                    # (수동제어 잠금해제 조건에 필요, MapPanel.tsx 참고).
+                    publish_hmi_state(tctx, "긴급정지")
+                    if tctx.spray_fx is not None:
+                        tctx.spray_fx.clear()   # [HMI v2] 분사 중 긴급정지 시 뜬 파티클 정리(보험 — g_spray_sweep 자체 체크도 있음)
             print(f"[ESTOP] 긴급정지 수신 → 정지 {targets}")
         elif cmd == "START":
             for t in targets:
                 estop_flags[t] = False
             print(f"[ESTOP] START 수신 → 해제 {targets}")
+        elif cmd == "MANUAL_OVERRIDE":
+            for t in targets:
+                override_cmd[t] = "manual"
+            print(f"[OVERRIDE] 수동제어 → 작업 즉시 중단 {targets}")
+        elif cmd == "DOCK_RETURN":
+            for t in targets:
+                override_cmd[t] = "dock"
+                # ★도킹 복귀 = 언제든지·최우선★ : 긴급정지 중이어도 즉시 풀어야 g_run_nav_leg 의
+                # estop 대기 루프(정지된 채 goal 재발행도 안 함)에 걸려 멈춰있지 않고 바로 주행한다.
+                # (사람 회피 등 물리 충돌방지는 Nav2 costmap/PersonGate 가 estop_flags 와 무관하게
+                # 별도로 계속 작동하므로 안전 자체가 사라지는 건 아님.)
+                estop_flags[t] = False
+            print(f"[OVERRIDE] 도킹 복귀(작업 초기화) 요청 {targets} (긴급정지 해제 겸함)")
 
     ros_node.create_subscription(String, "/robot/command", _on_hmi_command, 10)
     print("[ROS] /robot/command 구독(긴급정지 인지) — disinfect→carter1, waste→carter2, carter1/carter2 직접")
@@ -2225,6 +2378,7 @@ def main():
 
     c1_ctx = None; c1_cmd_pub = None; c1_gen = None; c1_done = not en_c1
     c2_ctx = None; c2_cmd_pub = None; c2_gen = None; c2_done = not en_c2
+    c1_in_override = False; c2_in_override = False   # 도킹복귀 제너레이터 실행 중 여부(끝나면 정상 FSM 복귀)
 
     try:
         if en_c1:
@@ -2338,18 +2492,47 @@ def main():
                 continue
 
             if not c1_done:
+                # ★수동제어/도킹복귀★ : 명령 오면 진행 중 작업 제너레이터를 즉시 교체(작업 중단).
+                if override_cmd["carter1"] is not None:
+                    mode = override_cmd["carter1"]; override_cmd["carter1"] = None
+                    c1_ctx.task_select_state["task"] = None; c1_ctx.pick_state["start"] = False
+                    if c1_cmd_pub is not None:
+                        c1_cmd_pub.publish(Twist())
+                    if mode == "dock":
+                        c1_gen = g_return_dock_and_reset(c1_ctx); c1_in_override = True
+                    else:  # "manual" : 작업만 중단하고 IDLE(비켜서기) → Nav2 가 수동 goal 주행
+                        c1_gen = g_task_select_mission(c1_ctx, trash_lock, spray_lock); c1_in_override = False
+                    print(f"[OVERRIDE][carter1] {mode} → 작업 중단, 제너레이터 교체")
                 try:
                     next(c1_gen)
                 except StopIteration:
-                    c1_done = True
-                    print("[C1] 미션 제너레이터 종료(비정상 — 통상 IDLE 유휴 루프라 안 끝남)")
+                    if c1_in_override:                     # 도킹복귀 끝 → 정상 FSM(IDLE) 재개
+                        c1_in_override = False
+                        c1_gen = g_task_select_mission(c1_ctx, trash_lock, spray_lock)
+                    else:
+                        c1_done = True
+                        print("[C1] 미션 제너레이터 종료(비정상 — 통상 IDLE 유휴 루프라 안 끝남)")
 
             if not c2_done:
+                if override_cmd["carter2"] is not None:
+                    mode = override_cmd["carter2"]; override_cmd["carter2"] = None
+                    c2_ctx.task_select_state["task"] = None; c2_ctx.pick_state["start"] = False
+                    if c2_cmd_pub is not None:
+                        c2_cmd_pub.publish(Twist())
+                    if mode == "dock":
+                        c2_gen = g_return_dock_and_reset(c2_ctx); c2_in_override = True
+                    else:
+                        c2_gen = g_task_select_mission(c2_ctx, trash_lock, spray_lock); c2_in_override = False
+                    print(f"[OVERRIDE][carter2] {mode} → 작업 중단, 제너레이터 교체")
                 try:
                     next(c2_gen)
                 except StopIteration:
-                    c2_done = True
-                    print("[C2] 미션 제너레이터 종료(비정상 — 통상 IDLE 유휴 루프라 안 끝남)")
+                    if c2_in_override:
+                        c2_in_override = False
+                        c2_gen = g_task_select_mission(c2_ctx, trash_lock, spray_lock)
+                    else:
+                        c2_done = True
+                        print("[C2] 미션 제너레이터 종료(비정상 — 통상 IDLE 유휴 루프라 안 끝남)")
 
             hb += 1
             if hb % 300 == 0:
