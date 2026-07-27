@@ -136,8 +136,10 @@ ARM_JOINT_NAMES = [f"joint_{i}" for i in range(1, 7)]
 
 # [2대 동시구동 둔감함 완화, 실측: ENABLE_C2=0 단독은 15_ 수준으로 쾌적 → 순수 2배 구조비용 확정]
 # RENDER_EVERY↑ = 물리/제어(60Hz)는 그대로, 렌더+카메라/포인트클라우드 발행 주기만 늦춤(저위험).
-# env var 로 재빌드 없이 실험 가능(RS_PUBLISH_EVERY 와 동일 패턴). 기본값은 기존과 동일(2)이라
-# 값을 안 주면 동작 변화 없음.
+# env var 로 재빌드 없이 실험 가능(RS_PUBLISH_EVERY 와 동일 패턴).
+# [2026-07-27] 3으로 승격 시도했다가, 라이브에서 캐스터 보정 저하 + RS_ON=1 과 결합 시 악화 발견
+# → 4는 더 심해짐(사용자 실측) → 2로 고정. RENDER_EVERY 값 자체가 캐스터/카메라 스톨과 얽히는
+# 부작용이 있는 것으로 보여 3 이상은 당분간 권장하지 않음.
 RENDER_EVERY = int(os.environ.get("RENDER_EVERY", "2"))
 CAM_RENDER_W = 640
 CAM_RENDER_H = 400
@@ -148,12 +150,12 @@ CAM_RENDER_H = 400
 CAM_KEEP_FULL_RES = ("front_hawk",)
 CAM_MINIMIZE_W = 16
 CAM_MINIMIZE_H = 16
-# [실험적, 2번 레버] 16x16 으로 줄여도 render product 자체는 여전히 매 프레임 평가된다 — 아무도
-# 안 보는 11개(owl 4 + hawk 3방향)를 통째로 SetActive(False) 하면(해당 OmniGraph 노드 1개만
-# 비활성화, 그래프 나머지는 안 건드림) 렌더 패스 자체가 안 돎 → 해상도 축소보다 더 아낄 가능성.
-# 라이브 미검증(다운스트림 ROS2CameraHelper 가 비활성 업스트림에 어떻게 반응하는지 확인 필요)이라
-# 기본 꺼둠 — CAM_DEACTIVATE_UNUSED=1 로 옵트인, 문제 있으면 그냥 안 켜면 기존과 100% 동일.
-CAM_DEACTIVATE_UNUSED = os.environ.get("CAM_DEACTIVATE_UNUSED", "0") == "1"
+# 16x16 으로 줄여도 render product 자체는 여전히 매 프레임 평가된다 — 아무도 안 보는 11개(owl 4 +
+# hawk 3방향)를 통째로 SetActive(False) 하면(해당 OmniGraph 노드 1개만 비활성화, 그래프 나머지는
+# 안 건드림) 렌더 패스 자체가 안 돎 → 해상도 축소보다 더 아낌. [2026-07-27] 헤드리스 스모크테스트
+# (씬 빌드/ROS2 브리지 부작용 없음) + 라이브 검증(쾌적함 체감) 완료돼 기본값으로 승격.
+# CAM_DEACTIVATE_UNUSED=0 으로 끄면 기존(16x16 축소만) 동작으로 되돌아감.
+CAM_DEACTIVATE_UNUSED = os.environ.get("CAM_DEACTIVATE_UNUSED", "1") == "1"
 
 NS_CARTER1 = "carter1"
 NS_CARTER2 = "carter2"
@@ -350,7 +352,14 @@ HOME2_XY = np.array([C2_START_POSE["x"], C2_START_POSE["y"]])
 HOME2_YAW = np.radians(C2_START_POSE["yaw_deg"])
 
 # Surface Gripper 튜닝(15_/16_ 검증값 — grip_travel 을 IK 접근오차보다 넉넉히, clearance 는 최소).
-MAX_GRIP_DISTANCE = 0.04
+# [2026-07-27 재보정] MAX_GRIP_DISTANCE=0.04(4cm) 는 D6 조인트 컴플라이언스(GRIP_TRAVEL=1.5cm)
+# 보다 훨씬 넉넉해서, 트래시 크립(게이팅 없음, 매 스텝 즉시 grip 시도)이 물체에서 최대 4cm 떨어진
+# 상태로도 바로 잡혀버려 눈에 띄는 틈이 남는 원인이 됐다(사용자 라이브 관찰). 노즐 쪽은 이미
+# TC_CREEP_GRIP_ATTEMPT_RADIUS=GRIP_TRAVEL(1.5cm)로 게이팅해뒀으니, 이 물리적 그립범위 자체도
+# GRIP_TRAVEL 과 맞춰 — "조인트가 실제로 컴플라이언스로 흡수할 수 있는 거리 안에서만 잡힌다"로
+# 통일(기하 추정 불필요, 하드 물리 제약이라 안전). 노즐은 기존 게이팅과 값이 같아져 동작 변화 없음,
+# 트래시는 게이팅이 없던 채로 그립 자체가 더 가까워야만 성공하게 돼 틈이 줄어들 것으로 기대.
+MAX_GRIP_DISTANCE = 0.015
 GRIP_DRIVE_STIFFNESS = 5000.0
 GRIP_DRIVE_DAMPING = 100.0
 CLEARANCE_OFFSET = 0.0005
@@ -500,6 +509,10 @@ RS_OFFSET = Gf.Vec3d(0.0, -0.30, 0.35)              # chassis 기준 우측(-Y)�
 RS_RESOLUTION = (320, 240)      # ★YOLO용★ 저해상도(근접 사람 감지엔 충분, render product 부담↓)
 RS_FOCAL = 14.0                                    # mm. ↓=광각(가까운 사람 잘 봄) / ↑=협각
 RS_PUBLISH_EVERY = int(os.environ.get("RS_PUBLISH_EVERY", "15"))  # 메인 루프 N스텝마다 1프레임 발행
+# [2026-07-27 시도·롤백] RS_PUBLISH_EVERY(15)가 RENDER_EVERY(3)의 배수라 읽기 스텝이 항상 렌더
+# 트리거 스텝과 겹친다는 점에 착안, 렌더와 안 겹치게 읽기를 몇 스텝 늦추는 RS_READ_DELAY_STEPS 를
+# 시도했으나 라이브 실측 결과 캐스터 보정이 오히려 더 나빠져 롤백함(가설 반증 또는 역효과가 더 큼,
+# 원인 미확정) — 코드는 원래(렌더 스텝과 겹쳐도 그냥 읽음) 방식 그대로.
 
 C2_CHASSIS = C2_ARTICULATION_ROOT   # camera 부착 기준(C1_CHASSIS 와 대칭)
 C1_RS_PRIM = f"{C1_CHASSIS}/realsense_3oclock"
@@ -1307,11 +1320,17 @@ def g_hold_pose(ctx, target_position, target_orientation, steps):
             target_end_effector_position=target_position, target_end_effector_orientation=target_orientation))
 
 
-def g_rotate_in_place(ctx, target_yaw, kp, kd, w_max, max_w_step, tol, chassis_path, max_steps=600):
+def g_rotate_in_place(ctx, target_yaw, kp, kd, w_max, max_w_step, tol, chassis_path, max_steps=600,
+                      force_direction=None):
     """[19_ 병합] Nav2 가 관여 안 하는 순수 스크립트 주행 구간이라, 사람감지(YOLO)/긴급정지(HMI) 를
     여기서 직접 게이팅한다 — 둘 다 '제자리 정지'로 동일 처리(전진 없이 이 스텝만 건너뜀, 상태는
     그대로 유지해 재개 시 이어서 진행). ctx.person_gate/ctx.estop_flags 가 None 이면(카메라
-    비활성/HMI 미연결) 무해하게 통과."""
+    비활성/HMI 미연결) 무해하게 통과.
+    [2026-07-27] force_direction="cw"/"ccw" — 기본(None)은 wrap_pi 로 최단경로를 따라가는데,
+    target_yaw 가 현재 yaw 와 정확히 180도 차이(예: 후진+180도 회전)면 wrap_pi(diff) 의 부호가
+    +π/-π 경계에서 부동소수점 오차로 실행마다 뒤바뀌어 회전방향이 무작위로 보임(사용자 관찰) —
+    force_direction 지정 시 그 방향이 되도록 오차를 2π 만큼 밀어서 부호를 강제한다(목표 각도
+    자체는 그대로, 최단경로가 아닐 수 있음)."""
     prev_yaw = get_chassis_yaw(chassis_path); w_applied = 0.0; settled = 0
     for _ in range(max_steps):
         yield
@@ -1321,6 +1340,10 @@ def g_rotate_in_place(ctx, target_yaw, kp, kd, w_max, max_w_step, tol, chassis_p
             continue
         yaw = get_chassis_yaw(chassis_path)
         yaw_err = wrap_pi(target_yaw - yaw)
+        if force_direction == "cw" and yaw_err > 0:
+            yaw_err -= 2.0 * np.pi
+        elif force_direction == "ccw" and yaw_err < 0:
+            yaw_err += 2.0 * np.pi
         yaw_rate = wrap_pi(yaw - prev_yaw) / PHYSICS_DT
         prev_yaw = yaw
         if abs(yaw_err) < tol:
@@ -1968,7 +1991,11 @@ def g_trash_mission(ctx):
     lateral_err = float(np.linalg.norm(lateral_vec))
     print(f"[INFO][{ctx.name}] 실측 쓰레기통={trash_now}, 수직오차={lateral_err:.3f}m")
     if LATERAL_CORRECTION_MIN < lateral_err <= LATERAL_CORRECTION_MAX:
-        yield from g_move_to_pose(ctx, grasp_position + lateral_vec, grasp_orientation, "좌우/높이 보정")
+        # [2026-07-27] MAX_GRIP_DISTANCE 를 1.5cm 로 좁혔으므로, 이후 깊이(depth) 크립만으로는
+        # 못 고치는 좌우/상하 잔여오차가 기본 POSITION_TOLERANCE(3cm)보다 타이트해야 그립범위
+        # 안에 들어온다 — 여기서만 1cm 로 좁혀서(그립범위 대비 5mm 여유) 호출.
+        yield from g_move_to_pose(ctx, grasp_position + lateral_vec, grasp_orientation, "좌우/높이 보정",
+                                  position_tolerance=0.01)
         grasp_position = get_prim_world_position(ctx.tool0_path)
     elif lateral_err > LATERAL_CORRECTION_MAX:
         print(f"[WARN][{ctx.name}] 수직오차 과대({lateral_err:.3f}m) → 보정 생략")
@@ -2060,9 +2087,11 @@ def g_trash_mission(ctx):
     yield from g_drive_straight_open_loop(ctx, POST_RETURN_BACKUP_DISTANCE, ctx.articulation_root,
                                           FINAL_APPROACH_SPEED, reverse=True)
     post_ret_yaw = wrap_pi(get_chassis_yaw(ctx.articulation_root) + np.pi)
+    # [2026-07-27 사용자 요청] 쓰레기통 두고 후진 후 180도 회전은 항상 시계방향으로.
     yield from g_rotate_in_place(ctx, post_ret_yaw, FINAL_ROTATE_KP, FINAL_ROTATE_KD, FINAL_ROTATE_W_MAX,
-                                 FINAL_ROTATE_MAX_W_STEP, FINAL_ROTATE_TOLERANCE_RAD, ctx.articulation_root)
-    print(f"[APPROACH:RETURN][{ctx.name}] {POST_RETURN_BACKUP_DISTANCE:.2f}m 후진 + 180 회전 완료")
+                                 FINAL_ROTATE_MAX_W_STEP, FINAL_ROTATE_TOLERANCE_RAD, ctx.articulation_root,
+                                 force_direction="cw")
+    print(f"[APPROACH:RETURN][{ctx.name}] {POST_RETURN_BACKUP_DISTANCE:.2f}m 후진 + 180 회전(시계방향) 완료")
     print(f"[INFO][{ctx.name}] 트래시 미션 완료(파지+덤프+원위치복귀).")
     ctx.status = "트래시 완료 — IDLE 복귀"
 
@@ -2439,6 +2468,9 @@ def main():
             rclpy.spin_once(ros_node, timeout_sec=0.0)
 
             # ★YOLO 병합★ N스텝마다 우측 RealSense 프레임 발행(뷰어가 구독해 YOLO 추론).
+            # [2026-07-27] RS_READ_DELAY_STEPS(렌더 스텝과 안 겹치게 읽기를 늦추는 시도)를 라이브
+            # 실측했더니 캐스터 보정이 오히려 더 나빠져서 롤백 — 가설(스톨 감소)이 틀렸거나 최소한
+            # 역효과가 더 컸다. 원인은 아직 미확정, 원래(렌더 스텝과 겹쳐도 됨) 방식으로 복귀.
             if step_i % RS_PUBLISH_EVERY == 0:
                 publish_realsense_frame(c1_rs_cam, c1_rs_pub, C1_RS_FRAME_ID, t)
                 publish_realsense_frame(c2_rs_cam, c2_rs_pub, C2_RS_FRAME_ID, t)
