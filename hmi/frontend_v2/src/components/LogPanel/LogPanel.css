@@ -1,0 +1,65 @@
+.log-panel {
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 220px;
+}
+.log-panel__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.log-panel__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  max-height: 260px;
+  overflow-y: auto;
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+.log-panel__empty {
+  color: var(--ink-muted);
+  font-family: var(--font-ui);
+  padding: 8px 4px;
+}
+.log-panel__row {
+  display: grid;
+  grid-template-columns: 68px 110px 1fr;
+  gap: 8px;
+  padding: 5px 4px;
+  border-bottom: 1px solid var(--border);
+  align-items: baseline;
+}
+.log-panel__time {
+  color: var(--ink-muted);
+}
+.log-panel__robot {
+  color: var(--ink-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.log-panel__msg {
+  color: var(--ink);
+}
+.log-panel__row--error .log-panel__msg {
+  color: var(--state-error);
+  font-weight: 500;
+}
+
+/* 관리자 UI 액션 로그 — 로봇 이벤트와 구분되도록 살짝 강조 */
+.log-panel__row--ui .log-panel__msg {
+  color: var(--ink);
+  font-weight: 600;
+}
+.log-panel__ui-icon {
+  display: inline-block;
+  vertical-align: -1px;
+  margin-right: 4px;
+  color: var(--ink-muted);
+}

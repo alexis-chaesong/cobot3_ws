@@ -1,0 +1,25 @@
+{
+  "name": "isolation-ward-hmi-v2",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "격리 병동 로봇 관제 HMI v2 - 작업선택식(19_) 대응, carter1/carter2 통일 식별체계",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "lucide-react": "^0.454.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.3",
+    "typescript": "^5.6.3",
+    "vite": "^5.4.10"
+  }
+}

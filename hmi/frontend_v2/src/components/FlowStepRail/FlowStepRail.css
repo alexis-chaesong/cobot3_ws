@@ -1,0 +1,71 @@
+.flow-rail {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  /* variant별 강조색을 지역 변수로 받아 아래에서 재사용 */
+  --accent: var(--state-idle);
+}
+.flow-rail--waste {
+  --accent: var(--waste-accent);
+}
+.flow-rail--disinfect {
+  --accent: var(--disinfect-accent);
+}
+
+.flow-step {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 5px 6px;
+  border-radius: var(--radius-sm);
+  color: var(--ink-muted);
+  position: relative;
+}
+
+/* 점(dot) — 단계 번호 또는 체크 */
+.flow-step__dot {
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 500;
+  border: 1.5px solid var(--border);
+  background: var(--surface-panel);
+  color: var(--ink-muted);
+}
+
+.flow-step__label {
+  font-size: 13px;
+}
+
+/* 완료된 단계 */
+.flow-step--done .flow-step__dot {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+.flow-step--done .flow-step__label {
+  color: var(--ink);
+}
+
+/* 현재 단계 — 강조 */
+.flow-step--current {
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+.flow-step--current .flow-step__dot {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 25%, transparent);
+}
+.flow-step--current .flow-step__label {
+  color: var(--ink);
+  font-weight: 600;
+}
