@@ -1,10 +1,14 @@
+/* [2026-07-27 디자인 개편] 상태 카드가 "너무 크다"는 피드백 — 패딩/간격을 줄이고
+   FlowStepRail 을 세로 목록에서 가로 스테퍼로 바꿔(FlowStepRail.css) 세로 공간을 크게
+   절약. 기능/데이터는 전혀 안 바뀜, 순수 레이아웃 압축. */
 .robot-lane {
-  padding: 16px;
+  padding: 14px 16px;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 10px;
   --accent: var(--state-idle);
-  --tint: var(--surface-page);
+  --tint: var(--surface-panel-soft);
+  overflow: hidden;
 }
 .robot-lane--waste {
   --accent: var(--waste-accent);
@@ -24,6 +28,7 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex: 0 0 auto;
 }
 .robot-lane__title {
   display: flex;
@@ -31,26 +36,33 @@
   gap: 8px;
 }
 .robot-lane__title h2 {
-  font-size: 16px;
-  font-weight: 700;
+  font-size: 20px;
+  font-weight: 800;
+  letter-spacing: -0.01em;
 }
 .robot-lane__badge {
-  width: 12px;
-  height: 12px;
+  width: 10px;
+  height: 10px;
   border-radius: 3px;
   background: var(--accent);
+}
+
+.robot-lane__head-right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
 /* 상태 pill */
 .robot-lane__state {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  font-size: 12px;
-  font-weight: 600;
-  padding: 3px 10px;
+  gap: 5px;
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  padding: 3px 9px;
   border-radius: 999px;
-  background: var(--surface-page);
+  background: var(--surface-panel-soft);
   color: var(--state-idle);
 }
 .robot-lane__state--running {
@@ -68,27 +80,74 @@
   color: var(--ink-muted);
 }
 
+/* [HMI v2 신규] 로봇별 개별 긴급정지 버튼 */
+.robot-lane__estop-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--state-error);
+  background: color-mix(in srgb, var(--state-error) 9%, transparent);
+  border: 1px solid color-mix(in srgb, var(--state-error) 35%, transparent);
+  border-radius: 999px;
+  padding: 3px 9px;
+}
+.robot-lane__estop-btn:hover {
+  background: color-mix(in srgb, var(--state-error) 18%, transparent);
+}
+.robot-lane__estop-btn:active {
+  transform: translateY(1px);
+}
+
+/* [HMI v2 신규] 로봇별 개별 재개 버튼(긴급정지 중에만 노출) */
+.robot-lane__resume-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 13px;
+  font-weight: 700;
+  color: #fff;
+  background: var(--state-running);
+  border: none;
+  border-radius: 999px;
+  padding: 3px 9px;
+}
+.robot-lane__resume-btn:hover {
+  filter: brightness(0.94);
+}
+.robot-lane__resume-btn:active {
+  transform: translateY(1px);
+}
+
 .robot-lane__process {
   font-family: var(--font-mono);
-  font-size: 13px;
+  font-size: 14px;
   color: var(--ink);
   background: var(--tint);
-  padding: 8px 12px;
+  padding: 7px 10px;
   border-radius: var(--radius-sm);
+  flex: 0 0 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* [HMI v2 신규] 작업 미배정 안내 문구 — FlowStepRail 대신 표시 */
 .robot-lane__unassigned {
-  font-size: 13px;
-  color: var(--ink-muted);
+  font-size: var(--fs-sm);
+  color: var(--ink-faint);
   font-style: italic;
-  padding: 8px 0;
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
 }
 
 .robot-lane__foot {
   margin-top: auto;
   display: flex;
   gap: 8px;
+  flex: 0 0 auto;
 }
 
 /* [HMI v2 신규] 작업선택 버튼 — 기존 .robot-lane__start(단일 버튼)를 대체 */
@@ -98,12 +157,13 @@
   align-items: center;
   justify-content: center;
   gap: 6px;
-  font-size: 13px;
-  font-weight: 600;
+  font-size: 15px;
+  font-weight: 700;
   color: #fff;
   border: none;
   border-radius: var(--radius-sm);
-  padding: 8px 14px;
+  padding: 10px 12px;
+  transition: filter 0.12s ease;
 }
 .robot-lane__task-btn--waste {
   background: var(--waste-accent);

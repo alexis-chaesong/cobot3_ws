@@ -11,6 +11,7 @@ import {
   createContext,
   useContext,
   useEffect,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
@@ -18,6 +19,8 @@ import { CARTER_IDS } from "../constants/carters";
 import { STEPS_BY_TASK } from "../constants/steps";
 import { apiClient } from "../lib/apiClient";
 import { MOCK, connectMockSocket } from "../lib/mock/mockSocket";
+import { markHistoryReset } from "../lib/historyResetMarker";
+import { clearUiActionLog } from "../lib/uiActionLog";
 import type {
   CarterId,
   RobotSnapshot,
@@ -140,6 +143,19 @@ export function RobotStatusProvider({ children }: { children: ReactNode }) {
 
     return cleanup;
   }, []);
+
+  // [HMI v2 신규] 두 로봇이 모두 대기(idle) 상태가 되는 순간 = "전체 작업 완료"로 보고
+  // 작업 큐/로그 화면을 정리한다(DB는 보존 — historyResetMarker.ts 참고). 최초 마운트 시
+  // (기본값이 이미 둘 다 idle) 곧바로 초기화가 발동하지 않도록 이전값을 true 로 시작한다.
+  const prevAllIdleRef = useRef(true);
+  useEffect(() => {
+    const allIdle = CARTER_IDS.every((id) => snapshots[id].state === "idle");
+    if (allIdle && !prevAllIdleRef.current) {
+      markHistoryReset();
+      clearUiActionLog();
+    }
+    prevAllIdleRef.current = allIdle;
+  }, [snapshots]);
 
   const hasError = CARTER_IDS.some((id) => snapshots[id].state === "error");
 

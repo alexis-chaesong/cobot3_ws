@@ -37,3 +37,10 @@ export function subscribeUiActionLog(listener: Listener): () => void {
   listener(entries);
   return () => listeners.delete(listener);
 }
+
+/** [HMI v2 신규] 전체 작업 완료(두 로봇 다 대기) 시 호출 — 이 로그는 DB 없이 인메모리라
+ * 그대로 비우면 된다(historyResetMarker.ts 는 DB 기반 두 소스(useTaskQueue/useLogs)용). */
+export function clearUiActionLog(): void {
+  entries = [];
+  notify();
+}

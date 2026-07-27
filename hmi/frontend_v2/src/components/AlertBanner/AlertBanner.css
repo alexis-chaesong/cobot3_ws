@@ -1,12 +1,22 @@
+/* [2026-07-27 디자인 개편] 예전엔 레이아웃 안 고정 슬롯(문서 흐름)이라 나타나면 다른 패널을
+   밀어냈음 — 지금은 화면이 100vh 고정(스크롤 없음)이라 그러면 레이아웃이 깨진다. 화면 상단에
+   뜨는 고정 오버레이로 바꿔 그리드를 절대 안 밀어내게 한다(조건부 렌더 자체는 그대로). */
 .alert-banner {
+  position: fixed;
+  top: 18px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 50;
   display: flex;
   align-items: flex-start;
   gap: 12px;
-  padding: 14px 18px;
+  padding: 12px 20px;
   border-radius: var(--radius-md);
-  background: color-mix(in srgb, var(--state-error) 10%, var(--surface-panel));
+  background: var(--surface-panel);
   border: 1px solid var(--state-error);
+  box-shadow: var(--shadow-float);
   color: var(--state-error);
+  max-width: min(720px, calc(100vw - 48px));
 }
 .alert-banner__icon {
   flex: 0 0 auto;
@@ -21,7 +31,7 @@
   display: flex;
   gap: 10px;
   align-items: baseline;
-  font-size: 13px;
+  font-size: var(--fs-sm);
   color: var(--ink);
 }
 .alert-banner__line strong {

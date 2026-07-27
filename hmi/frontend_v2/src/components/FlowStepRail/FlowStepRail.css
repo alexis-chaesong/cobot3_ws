@@ -1,10 +1,15 @@
+/* [2026-07-27 디자인 개편 2차] 가로 스테퍼가 세로로 긴 상태 카드 가운데에 떠서 위아래로
+   큰 빈 공간이 생기던 문제(강사 지적 "상태 전이 깨짐") → 세로 타임라인 스테퍼로 전환.
+   카드 높이를 자연스럽게 채우고 모든 단계 라벨을 항상 노출해 "지금 몇 단계 + 전체 흐름"을
+   한눈에 본다. 컴포넌트/prop/데이터 흐름은 전혀 안 바뀜 — 순수 CSS 재구성. */
 .flow-rail {
   list-style: none;
   margin: 0;
-  padding: 0;
+  padding: 4px 2px;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  flex: 1 1 auto;
+  min-height: 0;
   /* variant별 강조색을 지역 변수로 받아 아래에서 재사용 */
   --accent: var(--state-idle);
 }
@@ -18,31 +23,57 @@
 .flow-step {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 5px 6px;
-  border-radius: var(--radius-sm);
-  color: var(--ink-muted);
+  gap: 12px;
+  flex: 1 1 0; /* 각 단계가 세로 공간을 균등 분배 → 타임라인이 카드를 꽉 채움 */
+  min-height: 0;
   position: relative;
+  cursor: default;
+}
+
+/* 세로 연결선 — 이 단계 dot 중심에서 다음 dot 중심까지(dot 뒤로 지나가고 gap 에서만 보임) */
+.flow-step:not(:last-child)::before {
+  content: "";
+  position: absolute;
+  left: 14.5px;
+  top: 50%;
+  height: 100%;
+  width: 2px;
+  transform: translateX(-50%);
+  background: var(--border);
+  z-index: 0;
+}
+.flow-step--done:not(:last-child)::before {
+  background: var(--accent);
 }
 
 /* 점(dot) — 단계 번호 또는 체크 */
 .flow-step__dot {
+  position: relative;
+  z-index: 1;
   flex: 0 0 auto;
-  width: 22px;
-  height: 22px;
+  width: 29px;
+  height: 29px;
   border-radius: 50%;
   display: grid;
   place-items: center;
   font-family: var(--font-mono);
-  font-size: 11px;
-  font-weight: 500;
+  font-size: 13.5px;
+  font-weight: 600;
   border: 1.5px solid var(--border);
   background: var(--surface-panel);
-  color: var(--ink-muted);
+  color: var(--ink-faint);
+  transition: all 0.15s ease;
 }
 
+/* 라벨 — 세로 레이아웃에선 항상 노출(공간 충분) */
 .flow-step__label {
-  font-size: 13px;
+  min-width: 0;
+  font-size: 15px;
+  color: var(--ink-faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transition: color 0.15s ease;
 }
 
 /* 완료된 단계 */
@@ -52,20 +83,18 @@
   color: #fff;
 }
 .flow-step--done .flow-step__label {
-  color: var(--ink);
+  color: var(--ink-muted);
 }
 
-/* 현재 단계 — 강조 */
-.flow-step--current {
-  background: color-mix(in srgb, var(--accent) 10%, transparent);
-}
+/* 현재 단계 — 강조 링 + 라벨 볼드 */
 .flow-step--current .flow-step__dot {
   background: var(--accent);
   border-color: var(--accent);
   color: #fff;
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 25%, transparent);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 20%, transparent);
 }
 .flow-step--current .flow-step__label {
+  font-size: 16px;
+  font-weight: 700;
   color: var(--ink);
-  font-weight: 600;
 }

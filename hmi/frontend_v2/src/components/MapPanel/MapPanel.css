@@ -1,15 +1,21 @@
+/* [2026-07-27 디자인 개편] 내비 지도가 "너무 크다"는 피드백 — 기존엔 aspect-ratio 로 폭에
+   맞춰 높이가 무한정 늘어났음(넓은 화면일수록 지도가 비대해짐). 지금은 대시보드 그리드
+   셀 안에 고정되고(flex:1), 캔버스는 실제 맵 해상도의 고유 비율로 열 폭을 채운다
+   (아래 .map-panel__canvas 참고) — 어떤 화면에서도 과도하게 커지지 않는다. */
 .map-panel {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  height: 100%;
 }
 
 .map-panel__head {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 10px 14px;
+  padding: 10px 16px;
   border-bottom: 1px solid var(--border);
+  flex: 0 0 auto;
 }
 
 .map-panel__head-right {
@@ -27,25 +33,26 @@
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  font-size: 12px;
-  font-weight: 600;
-  padding: 6px 12px;
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  padding: 5px 12px;
   border-radius: 999px;
   border: 1px solid var(--border);
-  background: var(--surface-page);
+  background: var(--surface-panel-soft);
+  color: var(--ink);
   cursor: pointer;
 }
 .map-panel__dock-btn:hover {
-  background: var(--surface-raised, #1a2329);
+  background: var(--border);
 }
 
 .map-panel__toggle-btn {
-  font-size: 12px;
-  font-weight: 600;
-  padding: 6px 12px;
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  padding: 5px 12px;
   border-radius: 999px;
   border: 1px solid var(--border);
-  background: var(--surface-page);
+  background: var(--surface-panel-soft);
   color: var(--ink-muted);
 }
 .map-panel__toggle-btn--disinfect.map-panel__toggle-btn--active {
@@ -61,17 +68,26 @@
 
 .map-panel__stage {
   position: relative;
-  width: 100%;
-  aspect-ratio: 720 / 520;
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   background: #0e1519;
   overflow: hidden;
 }
 
 .map-panel__canvas {
+  /* 실제 맵 해상도(canvas.width/height = mapInfo dims)의 고유 비율을 그대로 사용해
+     열 폭을 꽉 채운다 — 하드코딩 aspect-ratio 로 인한 세로 찌그러짐 제거 + 중앙 열의
+     넓은 다크 여백(레터박스) 최소화. 요소 자체가 그려진 맵과 1:1 이라 클릭 좌표 보정
+     (handleCanvasClick 의 scaleX/scaleY)도 그대로 정확. */
   width: 100%;
-  height: 100%;
+  height: auto;
+  max-height: 100%;
   display: block;
   cursor: crosshair;
+  border-radius: 2px;
 }
 .map-panel__canvas--locked {
   cursor: not-allowed;
@@ -86,21 +102,24 @@
   justify-content: center;
   gap: 6px;
   color: #6b7d86;
-  font-size: 13px;
+  font-size: 14px;
 }
 
 .map-panel__toolbar {
-  padding: 10px 14px;
+  padding: 8px 16px;
   border-top: 1px solid var(--border);
-  min-height: 20px;
+  min-height: 18px;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 6px;
+  flex: 0 0 auto;
+  max-height: 72px;
+  overflow-y: auto;
 }
 
 .map-panel__hint {
   margin: 0;
-  font-size: 12px;
+  font-size: 14px;
   color: var(--ink-muted);
 }
 .map-panel__hint--locked {
@@ -112,7 +131,7 @@
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  font-size: 12px;
+  font-size: 14px;
   color: var(--ink);
 }
 
@@ -120,7 +139,7 @@
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  font-size: 12px;
+  font-size: 14px;
   font-weight: 600;
   color: var(--state-error);
   background: color-mix(in srgb, var(--state-error) 10%, transparent);
@@ -137,7 +156,7 @@
 }
 
 .map-panel__draft-count {
-  font-size: 12px;
+  font-size: 14px;
   font-family: var(--font-mono);
   color: var(--ink-muted);
   margin-right: auto;
@@ -145,7 +164,7 @@
 
 .map-panel__draft-undo,
 .map-panel__draft-clear {
-  font-size: 12px;
+  font-size: 14px;
   font-weight: 600;
   color: var(--ink-muted);
   background: var(--surface-page);
@@ -158,7 +177,7 @@
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  font-size: 12px;
+  font-size: 14px;
   font-weight: 700;
   color: #fff;
   background: var(--state-running);

@@ -1,8 +1,13 @@
+/* [2026-07-27 디자인 개편] 타이틀은 더 크게, 바 자체는 더 슬림하게(세로공간 절약해
+   내비/상태 카드에 더 배분) — "관제실"보다 "매니징 대시보드" 톤으로. */
 .topbar {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 12px 18px;
+  padding: 6px 2px 4px;
+  /* 흰 박스 헤더 → 투명 헤더. 큰 타이틀이 페이지 배경 위에서 여백감 있게 숨쉬도록
+     ("관제실" 박스형 → "매니징 대시보드" 톤). 액션 버튼은 자체 컬러 pill 로 존재감 유지. */
+  background: transparent;
 }
 
 .topbar__brand {
@@ -11,38 +16,45 @@
   gap: 12px;
 }
 .topbar__brand-icon {
-  color: var(--ink-muted);
+  color: var(--disinfect-accent);
+  flex: 0 0 auto;
 }
 .topbar__title {
-  font-size: 17px;
-  font-weight: 700;
+  font-size: var(--fs-display);
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  line-height: 1.15;
 }
 .topbar__subtitle {
-  font-size: 12px;
+  font-size: var(--fs-sm);
+  font-weight: 500;
   color: var(--ink-muted);
 }
 
 .topbar__actions {
   display: flex;
   align-items: center;
-  /* 긴급정지를 명확히 떼어놓기 위한 큰 간격 */
-  gap: 40px;
+  gap: 14px;
 }
 
 .topbar__start-all {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  font-size: 15px;
-  font-weight: 600;
+  font-size: var(--fs-sm);
+  font-weight: 700;
   color: #fff;
   background: var(--state-running);
   border: none;
-  border-radius: var(--radius-sm);
-  padding: 10px 22px;
+  border-radius: 999px;
+  padding: 9px 20px;
+  transition: filter 0.12s ease, transform 0.06s ease;
 }
 .topbar__start-all:hover {
-  filter: brightness(0.94);
+  filter: brightness(0.95);
+}
+.topbar__start-all:active {
+  transform: translateY(1px);
 }
 
 /* ⚠ 긴급정지 — --state-error 전용. 다른 어떤 요소도 이 색을 쓰지 않는다. */
@@ -51,14 +63,16 @@
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  font-size: 16px;
-  font-weight: 700;
-  letter-spacing: 0.02em;
+  font-size: var(--fs-sm);
+  font-weight: 800;
+  letter-spacing: 0.01em;
   color: #fff;
   background: var(--state-error);
-  border: 2px solid color-mix(in srgb, var(--state-error) 70%, #000);
-  border-radius: var(--radius-sm);
-  padding: 10px 26px;
+  border: none;
+  border-radius: 999px;
+  padding: 9px 22px;
+  box-shadow: 0 2px 10px color-mix(in srgb, var(--state-error) 35%, transparent);
+  transition: filter 0.12s ease, transform 0.06s ease;
 }
 .topbar__estop:hover {
   filter: brightness(1.06);
