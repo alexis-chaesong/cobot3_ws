@@ -1,0 +1,119 @@
+.robot-lane {
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  --accent: var(--state-idle);
+  --tint: var(--surface-page);
+}
+.robot-lane--waste {
+  --accent: var(--waste-accent);
+  --tint: var(--waste-tint);
+}
+.robot-lane--disinfect {
+  --accent: var(--disinfect-accent);
+  --tint: var(--disinfect-tint);
+}
+
+/* 좌측에 로봇 색 띠 */
+.robot-lane {
+  border-top: 3px solid var(--accent);
+}
+
+.robot-lane__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.robot-lane__title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.robot-lane__title h2 {
+  font-size: 16px;
+  font-weight: 700;
+}
+.robot-lane__badge {
+  width: 12px;
+  height: 12px;
+  border-radius: 3px;
+  background: var(--accent);
+}
+
+/* 상태 pill */
+.robot-lane__state {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: var(--surface-page);
+  color: var(--state-idle);
+}
+.robot-lane__state--running {
+  color: var(--state-running);
+  background: color-mix(in srgb, var(--state-running) 12%, transparent);
+}
+.robot-lane__state--idle {
+  color: var(--state-idle);
+}
+.robot-lane__state--error {
+  color: var(--state-error);
+  background: color-mix(in srgb, var(--state-error) 12%, transparent);
+}
+.robot-lane__state--stopped {
+  color: var(--ink-muted);
+}
+
+.robot-lane__process {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--ink);
+  background: var(--tint);
+  padding: 8px 12px;
+  border-radius: var(--radius-sm);
+}
+
+/* [HMI v2 신규] 작업 미배정 안내 문구 — FlowStepRail 대신 표시 */
+.robot-lane__unassigned {
+  font-size: 13px;
+  color: var(--ink-muted);
+  font-style: italic;
+  padding: 8px 0;
+}
+
+.robot-lane__foot {
+  margin-top: auto;
+  display: flex;
+  gap: 8px;
+}
+
+/* [HMI v2 신규] 작업선택 버튼 — 기존 .robot-lane__start(단일 버튼)를 대체 */
+.robot-lane__task-btn {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #fff;
+  border: none;
+  border-radius: var(--radius-sm);
+  padding: 8px 14px;
+}
+.robot-lane__task-btn--waste {
+  background: var(--waste-accent);
+}
+.robot-lane__task-btn--disinfect {
+  background: var(--disinfect-accent);
+}
+.robot-lane__task-btn:hover {
+  filter: brightness(0.94);
+}
+.robot-lane__task-btn:active {
+  filter: brightness(0.88);
+}

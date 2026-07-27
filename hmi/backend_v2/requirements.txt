@@ -1,0 +1,5 @@
+# FastAPI 백엔드 의존성 (ROS2/rclpy는 시스템 ROS2 배포판에서 제공)
+fastapi>=0.110
+uvicorn[standard]>=0.29
+pydantic>=2.6
+websockets>=12.0

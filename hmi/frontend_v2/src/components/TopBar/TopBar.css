@@ -1,0 +1,88 @@
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 18px;
+}
+
+.topbar__brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.topbar__brand-icon {
+  color: var(--ink-muted);
+}
+.topbar__title {
+  font-size: 17px;
+  font-weight: 700;
+}
+.topbar__subtitle {
+  font-size: 12px;
+  color: var(--ink-muted);
+}
+
+.topbar__actions {
+  display: flex;
+  align-items: center;
+  /* 긴급정지를 명확히 떼어놓기 위한 큰 간격 */
+  gap: 40px;
+}
+
+.topbar__start-all {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 15px;
+  font-weight: 600;
+  color: #fff;
+  background: var(--state-running);
+  border: none;
+  border-radius: var(--radius-sm);
+  padding: 10px 22px;
+}
+.topbar__start-all:hover {
+  filter: brightness(0.94);
+}
+
+/* ⚠ 긴급정지 — --state-error 전용. 다른 어떤 요소도 이 색을 쓰지 않는다. */
+.topbar__estop {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: #fff;
+  background: var(--state-error);
+  border: 2px solid color-mix(in srgb, var(--state-error) 70%, #000);
+  border-radius: var(--radius-sm);
+  padding: 10px 26px;
+}
+.topbar__estop:hover {
+  filter: brightness(1.06);
+}
+.topbar__estop:active {
+  transform: translateY(1px);
+}
+
+/* 오류 상태일 때 긴급정지 버튼에 맥동 표시 */
+.topbar__estop-pulse {
+  position: absolute;
+  inset: -4px;
+  border-radius: inherit;
+  border: 2px solid var(--state-error);
+  animation: estop-pulse 1.1s ease-out infinite;
+  pointer-events: none;
+}
+@keyframes estop-pulse {
+  0% {
+    opacity: 0.9;
+    transform: scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.12);
+  }
+}

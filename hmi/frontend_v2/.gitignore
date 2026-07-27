@@ -1,0 +1,12 @@
+node_modules/
+dist/
+dist-ssr/
+*.local
+
+# 로컬 환경변수 (예시 파일 .env.example만 커밋, 실제 .env는 각자 관리)
+# .env 는 기본 mock 값이라 커밋해도 무방하지만, 실제 URL이 들어가면 무시하도록 유지
+.env.local
+.env.*.local
+
+.DS_Store
+*.log

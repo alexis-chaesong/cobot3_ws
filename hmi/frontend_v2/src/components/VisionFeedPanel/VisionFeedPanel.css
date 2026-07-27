@@ -1,0 +1,64 @@
+/* Vision/CCTV 공용 피드 패널 스타일 */
+.feed-panel {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.feed-panel__head {
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+}
+.panel-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.feed-panel__stage {
+  position: relative;
+  aspect-ratio: 16 / 9;
+  background: #0e1519; /* 영상 없는 관제 화면 느낌의 어두운 무대 */
+  overflow: hidden;
+}
+.feed-panel__img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.feed-panel__placeholder {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  color: #6b7d86;
+  font-size: 13px;
+}
+.feed-panel__placeholder small {
+  font-size: 11px;
+  color: #4c5c64;
+}
+
+/* bounding box 오버레이 */
+.feed-panel__bbox {
+  position: absolute;
+  border: 2px solid var(--state-running);
+  border-radius: 2px;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.3);
+}
+.feed-panel__bbox-label {
+  position: absolute;
+  top: -18px;
+  left: -2px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: #fff;
+  background: var(--state-running);
+  padding: 1px 5px;
+  border-radius: 2px;
+  white-space: nowrap;
+}
