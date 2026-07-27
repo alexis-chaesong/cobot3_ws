@@ -141,8 +141,15 @@ ARM_JOINT_NAMES = [f"joint_{i}" for i in range(1, 7)]
 # → 4는 더 심해짐(사용자 실측) → 2로 고정. RENDER_EVERY 값 자체가 캐스터/카메라 스톨과 얽히는
 # 부작용이 있는 것으로 보여 3 이상은 당분간 권장하지 않음.
 RENDER_EVERY = int(os.environ.get("RENDER_EVERY", "2"))
-CAM_RENDER_W = 640
-CAM_RENDER_H = 400
+# [2026-07-27] RENDER_EVERY 는 2로 고정(캐스터 부작용) → 대신 "매 렌더당 비용" 자체를 줄이는 쪽으로.
+# CAM_DEACTIVATE_UNUSED 로 11개는 이미 꺼져있어서, 실제로 매 렌더마다 무거운 카메라는 front_hawk
+# (YOLO 뷰어 기본 구독 대상) 하나뿐 — 이 해상도를 낮추는 게 스텝 타이밍(캐스터와 얽힌 원인)은
+# 안 건드리면서 "개별 렌더+읽기 작업의 소요시간"(픽셀수 비례, GPU 평균사용률과는 별개 축)을 줄이는
+# 저위험 레버. 라이브 실측 : 640x400→480x300 만으로도 캐스터 보정 체감 개선 확인 → 320x240 으로
+# 추가 축소. YOLO 자체가 입력을 imgsz=640 으로 리사이즈해서 쓰므로 소스 해상도를 낮춰도 감지 품질
+# 손해는 제한적일 것으로 예상(라이브에서 감지율 저하 없는지 확인 필요).
+CAM_RENDER_W = int(os.environ.get("CAM_RENDER_W", "320"))
+CAM_RENDER_H = int(os.environ.get("CAM_RENDER_H", "240"))
 # [19_ GPU 절감] Nova Carter 내장 카메라 12개(hawk 8+owl 4) 중 front_hawk 만 실사용(외부 YOLO
 # 뷰어 기본값 front_stereo_camera/left) — 그 외(front_hawk 의 right 포함, right/left/back_hawk,
 # owl)는 아무도 안 봄. keep_full_res 패턴에 안 걸리는 카메라는 CAM_RENDER_W/H 대신 이 극소
