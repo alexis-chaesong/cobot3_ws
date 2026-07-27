@@ -1,0 +1,407 @@
+# ── 멀티로봇 자동생성 (base: carter_navigation_params.yaml) ──
+# namespace=carter1. 토픽 /carter1/ 접두 + initial_pose 로봇별. map=modified_hospital_map.yaml(공유).
+# ※ 단일로봇 튜닝값(inflation 0.7, /scan costmap, always_send_full, max_vel_theta 1.2 등) 유지.
+amcl:
+  ros__parameters:
+    use_sim_time: True
+    # 위치 튕김(teleport)/불안정 대책: Isaac odom 은 사실상 ground-truth 라 노이즈 모델을 낮춰
+    # 오도메트리를 더 신뢰 → 파티클 구름을 좁게 유지 → 대칭 복도에서 다른 위치로 리샘플 점프 방지.
+    # 0.2→0.1→0.05 로 낮춤. (반대로 실로봇/odom 부정확하면 0.2 로 복귀)
+    alpha1: 0.05
+    alpha2: 0.05
+    alpha3: 0.05
+    alpha4: 0.05
+    alpha5: 0.05
+    base_frame_id: "base_link"
+    beam_skip_distance: 0.5
+    beam_skip_error_threshold: 0.9
+    beam_skip_threshold: 0.3
+    do_beamskip: false
+    global_frame_id: "map"
+    lambda_short: 0.1
+    laser_likelihood_max_dist: 2.0
+    laser_max_range: 100.0
+    laser_min_range: -1.0
+    laser_model_type: "likelihood_field"
+    max_beams: 360
+    max_particles: 2000
+    min_particles: 500
+    odom_frame_id: "odom"
+    pf_err: 0.05
+    pf_z: 0.99
+    recovery_alpha_fast: 0.0
+    recovery_alpha_slow: 0.0
+    resample_interval: 3
+    robot_model_type: "nav2_amcl::DifferentialMotionModel"
+    save_pose_rate: 0.5
+    sigma_hit: 0.2
+    tf_broadcast: true
+    transform_tolerance: 1.0
+    update_min_a: 0.2
+    update_min_d: 0.25
+    z_hit: 0.5
+    z_max: 0.05
+    z_rand: 0.5
+    z_short: 0.05
+    scan_topic: /carter1/scan
+    map_topic: map
+    set_initial_pose: true
+    # 매 bringup 마다 initial_pose 로 강제 리셋 → 시작위치가 매번 달라지는 문제 방지(결정론적).
+    # (false 면 이전 세션 잔여 pose 를 물고 시작해 매번 어긋남). initial_pose 는 Isaac 스폰의
+    # 실제 map 좌표여야 함 → 아래 절차로 /amcl_pose 값을 받아 x/y/yaw 에 넣을 것.
+    always_reset_initial_pose: true
+    first_map_only: false
+    # [2026-07-27 수정] 17_/19_ 의 "팔 베이스 도킹스테이션 중심 정렬 + 스폰방향 +Y 통일" 변경
+    # (C1_START_POSE y=0.2317, yaw=90°) 이 여기 반영 안 돼 있어 AMCL 초기pose 가 Isaac 실제
+    # 스폰과 어긋나던 문제 수정 — 반드시 Isaac 19_ C1_START_POSE 와 일치시킬 것.
+    initial_pose:                     # carter1 스폰 = Isaac CARTER_START_POSE 와 일치시킬 것
+      x: 18.5
+      y: 0.2317
+      z: 0.0
+      yaw: 1.5708
+
+amcl_map_client:
+  ros__parameters:
+    use_sim_time: True
+
+amcl_rclcpp_node:
+  ros__parameters:
+    use_sim_time: True
+bt_navigator:
+  ros__parameters:
+    use_sim_time: True
+    global_frame: map
+    robot_base_frame: base_link
+    odom_topic: /carter1/chassis/odom
+    bt_loop_duration: 20
+    default_server_timeout: 40
+    # 'default_nav_through_poses_bt_xml' and 'default_nav_to_pose_bt_xml' are use defaults:
+    # nav2_bt_navigator/navigate_to_pose_w_replanning_and_recovery.xml
+    # nav2_bt_navigator/navigate_through_poses_w_replanning_and_recovery.xml
+    # They can be set here or via a RewrittenYaml remap from a parent launch file to Nav2.
+    plugin_lib_names:
+    - nav2_compute_path_to_pose_action_bt_node
+    - nav2_compute_path_through_poses_action_bt_node
+    - nav2_smooth_path_action_bt_node
+    - nav2_follow_path_action_bt_node
+    - nav2_spin_action_bt_node
+    - nav2_wait_action_bt_node
+    - nav2_back_up_action_bt_node
+    - nav2_drive_on_heading_bt_node
+    - nav2_clear_costmap_service_bt_node
+    - nav2_is_stuck_condition_bt_node
+    - nav2_goal_reached_condition_bt_node
+    - nav2_goal_updated_condition_bt_node
+    - nav2_globally_updated_goal_condition_bt_node
+    - nav2_is_path_valid_condition_bt_node
+    - nav2_initial_pose_received_condition_bt_node
+    - nav2_reinitialize_global_localization_service_bt_node
+    - nav2_rate_controller_bt_node
+    - nav2_distance_controller_bt_node
+    - nav2_speed_controller_bt_node
+    - nav2_truncate_path_action_bt_node
+    - nav2_truncate_path_local_action_bt_node
+    - nav2_goal_updater_node_bt_node
+    - nav2_recovery_node_bt_node
+    - nav2_pipeline_sequence_bt_node
+    - nav2_round_robin_node_bt_node
+    - nav2_transform_available_condition_bt_node
+    - nav2_time_expired_condition_bt_node
+    - nav2_path_expiring_timer_condition
+    - nav2_distance_traveled_condition_bt_node
+    - nav2_single_trigger_bt_node
+    - nav2_is_battery_low_condition_bt_node
+    - nav2_navigate_through_poses_action_bt_node
+    - nav2_navigate_to_pose_action_bt_node
+    - nav2_remove_passed_goals_action_bt_node
+    - nav2_planner_selector_bt_node
+    - nav2_controller_selector_bt_node
+    - nav2_goal_checker_selector_bt_node
+    - nav2_controller_cancel_bt_node
+    - nav2_path_longer_on_approach_bt_node
+    - nav2_wait_cancel_bt_node
+    - nav2_spin_cancel_bt_node
+    - nav2_back_up_cancel_bt_node
+    - nav2_drive_on_heading_cancel_bt_node
+
+bt_navigator_rclcpp_node:
+  ros__parameters:
+    use_sim_time: True
+
+velocity_smoother: 
+  ros__parameters: 
+    smoothing_frequency: 20.0 
+    scale_velocities: false 
+    feedback: "OPEN_LOOP" 
+    max_velocity: [0.8, 0.0, 0.7] 
+    min_velocity: [-0.8, 0.0, -0.7] 
+    # deadband_velocity: [0.0, 0.0, 0.0] 
+    velocity_timeout: 1.0 
+    # max_accel: [1.0, 0.0, 1.25] 
+    # max_decel: [-1.0, 0.0, -1.25] 
+    odom_topic: "/carter1/chassis/odom" 
+    odom_duration: 0.1
+
+controller_server:
+  ros__parameters:
+    use_sim_time: True
+    controller_frequency: 20.0
+    min_x_velocity_threshold: 0.001
+    min_y_velocity_threshold: 0.5
+    min_theta_velocity_threshold: 0.001
+    failure_tolerance: 0.3
+    progress_checker_plugin: "progress_checker"
+    goal_checker_plugin: ["stopped_goal_checker"]
+    controller_plugins: ["FollowPath"]
+
+    # Progress checker parameters
+    progress_checker:
+      plugin: "nav2_controller::SimpleProgressChecker"
+      required_movement_radius: 0.5
+      movement_time_allowance: 10.0
+    # Goal checker parameters
+    stopped_goal_checker:
+      plugin: "nav2_controller::StoppedGoalChecker"
+      xy_goal_tolerance: 0.25
+      # [c1 스윕 시작각 정밀화] 0.25rad(≈14°) → 0.05rad(≈3°). c1 은 최종 yaw 를 전적으로 Nav2 에
+      # 의존(자체 cmd_vel 회전 없음)하므로, WP yaw(예 WP2=-90°)에 훨씬 가깝게 돌린 뒤 스윕 시작.
+      # (너무 조이면 목표각 근처서 오실레이션/지연 가능 → 3° 는 균형값. 필요시 0.087=5° 로 완화.)
+      yaw_goal_tolerance: 0.05
+      stateful: True
+    # DWB parameters
+    FollowPath:
+      plugin: "dwb_core::DWBLocalPlanner"
+      debug_trajectory_details: True
+      min_vel_x: 0.0
+      min_vel_y: 0.0
+      max_vel_x: 0.5
+      max_vel_y: 0.0
+      max_vel_theta: 1.2       # 회전 빠르게 0.5→1.2 (WP 간 180° U턴 지연 해소. Isaac 차동구동 클램프도 함께 ↑)
+      min_speed_xy: 0.0
+      max_speed_xy: 1.0
+      min_speed_theta: 0.0
+      acc_lim_x: 1.2
+      acc_lim_y: 0.0
+      acc_lim_theta: 3.0       # 회전 가속 1.5→3.0 (빨리 최고 각속도 도달)
+      decel_lim_x: -1.5
+      decel_lim_y: 0.0
+      decel_lim_theta: -2.0
+      vx_samples: 20
+      vy_samples: 5
+      vtheta_samples: 20
+      sim_time: 1.7
+      linear_granularity: 0.05
+      angular_granularity: 0.025
+      transform_tolerance: 1.0   # 저속 시뮬(~17Hz) TF 지연 견디게 0.2→1.0 (jump-back-in-time 대책)
+      xy_goal_tolerance: 0.25
+      trans_stopped_velocity: 0.25
+      short_circuit_trajectory_evaluation: True
+      stateful: True
+      critics: ["RotateToGoal", "Oscillation", "BaseObstacle", "GoalAlign", "PathAlign", "PathDist", "GoalDist"]
+      BaseObstacle.scale: 0.02
+      PathAlign.scale: 32.0
+      PathAlign.forward_point_distance: 0.1
+      GoalAlign.scale: 24.0
+      GoalAlign.forward_point_distance: 0.1
+      PathDist.scale: 32.0
+      GoalDist.scale: 24.0
+      RotateToGoal.scale: 32.0
+      RotateToGoal.slowing_factor: 5.0
+      RotateToGoal.lookahead_time: -1.0
+
+controller_server_rclcpp_node:
+  ros__parameters:
+    use_sim_time: True
+
+local_costmap:
+  local_costmap:
+    ros__parameters:
+      update_frequency: 5.0
+      publish_frequency: 2.0
+      footprint_padding: 0.25
+      global_frame: odom
+      robot_base_frame: base_link
+      use_sim_time: True
+      rolling_window: True
+      width: 10
+      height: 10
+      resolution: 0.05
+      always_send_full_costmap: True   # ★ 전체 그리드 매 사이클 발행 → RViz "No map received" 해결.
+                                       #   글로벌엔 있고 로컬엔 없어 로컬만 표시 안 됐음(내부 동작은 정상).
+      transform_tolerance: 1.0   # 저속 시뮬 TF 지연/메시지 유실 대책 0.3→1.0
+      footprint: "[ [0.14, 0.25], [0.14, -0.25], [-0.607, -0.25], [-0.607, 0.25] ]"
+      # 흔들림 대책: 3D 라이다(hesai_voxel)를 로컬 costmap 에서 제외. sim 3D 포인트클라우드가 바닥
+      # 노이즈·팔 구조를 유령장애물로 찍어 매 사이클 costmap 이 깜빡→DWB 가 홱홱 반응(=wobble).
+      # ★ 이 씬은 front/back 2D 라이다(/front_2d_lidar/scan 등)를 발행하지 않음(publisher 0) → 로컬
+      #   costmap 관측 0 → 미생성("No map received")이었음. 실제 살아있는 2D 스캔은 pointcloud_to_laserscan
+      #   이 3D 라이다→변환한 /scan (글로벌 costmap 과 동일). → 로컬도 /scan 단일 obstacle 레이어로 교체.
+      plugins: ["scan_obstacle_layer", "inflation_layer"]
+      # plugins: ["hesai_voxel_layer", "scan_obstacle_layer", "inflation_layer"]
+      inflation_layer:
+        plugin: "nav2_costmap_2d::InflationLayer"
+        enabled: True
+        cost_scaling_factor: 3.0
+        inflation_radius: 0.7   # 핑크 버퍼 두껍게 0.5→0.7 (복도 폭 3.4m·로봇 0.5m 라 통행 여유 충분)
+      hesai_voxel_layer:
+        plugin: "nav2_costmap_2d::VoxelLayer"
+        enabled: True
+        footprint_clearing_enabled: true
+        max_obstacle_height: 2.0
+        publish_voxel_map: False
+        origin_z: 0.0
+        z_voxels: 16
+        z_resolution: 0.2
+        unknown_threshold: 15
+        observation_sources: pointcloud
+        pointcloud:  # no frame set, uses frame from message
+          topic: /carter1/front_3d_lidar/lidar_points
+          max_obstacle_height: 2.0
+          min_obstacle_height: 0.1
+          obstacle_max_range: 10.0
+          obstacle_min_range: 0.0
+          raytrace_max_range: 10.0
+          raytrace_min_range: 0.0
+          clearing: True
+          marking: True
+          data_type: "PointCloud2"
+      scan_obstacle_layer:
+        plugin: "nav2_costmap_2d::ObstacleLayer"
+        enabled: True
+        observation_sources: scan
+        scan:
+          topic: /carter1/scan                     # pointcloud_to_laserscan (3D→2D). front/back 2D 라이다는 미발행
+          max_obstacle_height: 2.0
+          clearing: True
+          marking: True
+          data_type: "LaserScan"
+  local_costmap_client:
+    ros__parameters:
+      use_sim_time: True
+  local_costmap_rclcpp_node:
+    ros__parameters:
+      use_sim_time: True
+
+
+
+global_costmap:
+  global_costmap:
+    ros__parameters:
+      footprint_padding: 0.25
+      update_frequency: 1.0
+      publish_frequency: 1.0
+      global_frame: map
+      robot_base_frame: base_link
+      use_sim_time: True
+      footprint: "[ [0.14, 0.25], [0.14, -0.25], [-0.607, -0.25], [-0.607, 0.25] ]"
+      # rolling_window: True
+      # width: 200
+      # height: 200
+      resolution: 0.05
+      # origin_x: -100.0
+      # origin_y: -100.0
+      plugins: ["static_layer", "obstacle_layer", "inflation_layer"]
+      obstacle_layer:
+        plugin: "nav2_costmap_2d::ObstacleLayer"
+        enabled: True
+        observation_sources: scan
+        scan:
+          topic: /carter1/scan
+          max_obstacle_height: 2.0
+          clearing: True
+          marking: True
+          data_type: "LaserScan"
+          raytrace_max_range: 10.0
+          raytrace_min_range: 0.0
+          obstacle_max_range: 10.0
+          obstacle_min_range: 0.0
+      static_layer:
+        plugin: "nav2_costmap_2d::StaticLayer"
+        map_subscribe_transient_local: True
+      inflation_layer:
+        plugin: "nav2_costmap_2d::InflationLayer"
+        cost_scaling_factor: 3.0
+        inflation_radius: 0.7   # 핑크 버퍼 두껍게 0.5→0.7 (복도 폭 3.4m·로봇 0.5m 라 통행 여유 충분)
+      always_send_full_costmap: True
+  global_costmap_client:
+    ros__parameters:
+      use_sim_time: True
+  global_costmap_rclcpp_node:
+    ros__parameters:
+      use_sim_time: True
+
+map_server:
+  ros__parameters:
+    use_sim_time: True
+    yaml_filename: "carter_warehouse_navigation.yaml"
+
+map_saver:
+  ros__parameters:
+    use_sim_time: True
+    save_map_timeout: 5000
+    free_thresh_default: 0.25
+    occupied_thresh_default: 0.65
+    map_subscribe_transient_local: True
+
+planner_server:
+  ros__parameters:
+    expected_planner_frequency: 10.0
+    use_sim_time: True
+    planner_plugins: ["GridBased"]
+    GridBased:
+      plugin: "nav2_navfn_planner/NavfnPlanner"
+      tolerance: 0.5
+      use_astar: false
+      allow_unknown: true
+
+planner_server_rclcpp_node:
+  ros__parameters:
+    use_sim_time: True
+
+smoother_server:
+  ros__parameters:
+    use_sim_time: True
+    smoother_plugins: ["simple_smoother"]
+    simple_smoother:
+      plugin: "nav2_smoother::SimpleSmoother"
+      tolerance: 1.0e-10
+      max_its: 1000
+      do_refinement: True
+
+behavior_server:
+  ros__parameters:
+    costmap_topic: local_costmap/costmap_raw
+    footprint_topic: local_costmap/published_footprint
+    cycle_frequency: 5.0
+    behavior_plugins: ["spin", "backup", "drive_on_heading", "wait"]
+    spin:
+      plugin: "nav2_behaviors/Spin"
+    backup:
+      plugin: "nav2_behaviors/BackUp"
+    drive_on_heading:
+      plugin: "nav2_behaviors/DriveOnHeading"
+    wait:
+      plugin: "nav2_behaviors/Wait"
+    global_frame: odom
+    robot_base_frame: base_link
+    transform_tolerance: 1.0   # 저속 시뮬 TF 지연 견디게 0.2→1.0
+    use_sim_time: true
+    simulate_ahead_time: 2.0
+    max_rotational_vel: 1.0
+    min_rotational_vel: 0.4
+    rotational_acc_lim: 3.2
+
+robot_state_publisher:
+  ros__parameters:
+    use_sim_time: True
+
+waypoint_follower:
+  ros__parameters:
+    use_sim_time: True
+    loop_rate: 20
+    stop_on_failure: false
+    waypoint_task_executor_plugin: "wait_at_waypoint"
+    wait_at_waypoint:
+      plugin: "nav2_waypoint_follower::WaitAtWaypoint"
+      enabled: True
+      waypoint_pause_duration: 200
+
