@@ -236,7 +236,7 @@ TARGET_JOINTS_DEG = [-90.0, 101.0, 50.0, -94.0, 91.8, -1.1]
 TUCK_J1_DEG = 10.0
 DUMP_J1_DEG = TUCK_J1_DEG
 DUMP_J6_ROTATE_DEG = -180.0
-DUMP_RAMP_STEPS = 90
+DUMP_RAMP_STEPS = 240
 POST_DUMP_BACKUP_DISTANCE = 0.6
 POST_RETURN_BACKUP_DISTANCE = 0.6
 
@@ -516,7 +516,7 @@ RS_ON = os.environ.get("RS_ON", "1") == "1"        # False 면 카메라/발행 
 RS_OFFSET = Gf.Vec3d(0.0, -0.30, 0.35)              # chassis 기준 우측(-Y)·살짝 위.
 RS_RESOLUTION = (320, 240)      # ★YOLO용★ 저해상도(근접 사람 감지엔 충분, render product 부담↓)
 RS_FOCAL = 14.0                                    # mm. ↓=광각(가까운 사람 잘 봄) / ↑=협각
-RS_PUBLISH_EVERY = int(os.environ.get("RS_PUBLISH_EVERY", "15"))  # 메인 루프 N스텝마다 1프레임 발행
+RS_PUBLISH_EVERY = int(os.environ.get("RS_PUBLISH_EVERY", "30"))  # 메인 루프 N스텝마다 1프레임 발행
 # [2026-07-27 시도·롤백] RS_PUBLISH_EVERY(15)가 RENDER_EVERY(3)의 배수라 읽기 스텝이 항상 렌더
 # 트리거 스텝과 겹친다는 점에 착안, 렌더와 안 겹치게 읽기를 몇 스텝 늦추는 RS_READ_DELAY_STEPS 를
 # 시도했으나 라이브 실측 결과 캐스터 보정이 오히려 더 나빠져 롤백함(가설 반증 또는 역효과가 더 큼,
@@ -1552,6 +1552,19 @@ def g_dump_into_big_trash(ctx):
             dump_deg.append(float(np.degrees(cur[idx])))
     yield from g_ramp_to_joint_positions(ctx, dump_deg, DUMP_RAMP_STEPS)
     print(f"[INFO][{ctx.name}] big_trash 덤프 완료 (j1={DUMP_J1_DEG}, j6+={DUMP_J6_ROTATE_DEG})")
+
+    print(f"[INFO][{ctx.name}] 쓰레기통 털기 (위아래 흔들기)")
+    shake_steps = 20
+    shake_amp = 15.0
+    for _ in range(2):
+        shake_up = list(dump_deg)
+        shake_up[4] += shake_amp  # joint_5 위로
+        yield from g_ramp_to_joint_positions(ctx, shake_up, shake_steps)
+        shake_down = list(dump_deg)
+        shake_down[4] -= shake_amp  # joint_5 아래로
+        yield from g_ramp_to_joint_positions(ctx, shake_down, shake_steps)
+    
+    yield from g_ramp_to_joint_positions(ctx, dump_deg, shake_steps)
 
 
 def g_restore_upright_after_dump(ctx):
