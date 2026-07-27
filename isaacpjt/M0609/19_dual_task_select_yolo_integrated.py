@@ -1188,6 +1188,9 @@ class RobotCtx:
         self.holding_trash = False          # [HMI v2] g_trash_mission 파지~반납 사이 True — 도킹복귀
                                              # 시 쓰레기통 원위치 반납 판단에 사용(g_return_dock_and_reset)
         self.nozzle_tip_offset = None       # link_6 기준 nozzle_tcp 상대위치(3축) — 파지 직후 실측
+        self.spray_fx = None                # [HMI v2] g_spray_sweep 이 생성한 SprayFX 참조 — 수동제어/
+                                             # 도킹복귀/긴급정지로 스윕 제너레이터가 중간에 버려져도
+                                             # (return 경로를 못 타 자체 clear() 가 안 불림) 밖에서 정리 가능하게
         # [19_ 병합] __init__ 시그니처는 안 건드리고(사용자 결정) 기본값만 두고, main() 이 RobotCtx
         # 생성 직후 tool_changer 와 동일한 패턴으로 별도 대입한다.
         self.person_gate = None    # PersonGate 인스턴스(YOLO 사람회피) — main() 이 생성 후 주입
@@ -1722,6 +1725,7 @@ def g_spray_sweep(ctx, forward_distance=FORWARD_DISTANCE, max_steps=None):
     sweeper = Sweeper(-1.0, 1.0, S_CRUISE, S_ACCEL, PHYSICS_DT, S_HOLD_STEPS)
     q_hold = q_of_s(-1.0)
     spray_fx = SprayFX(stage) if SPRAY_FX_ON else None
+    ctx.spray_fx = spray_fx  # [HMI v2] 밖(g_return_dock_and_reset 등)에서도 정리할 수 있게 노출
 
     def apply(q_target):
         nonlocal q_applied
@@ -2185,6 +2189,8 @@ def g_return_dock_and_reset(ctx):
     ctx.status = "DOCK_RETURN: 도킹 복귀 + 작업 초기화"
     publish_hmi_state(ctx, "복귀")
     ctx.cmd_pub.publish(Twist())          # 진행 중이던 스크립트 주행 즉시 정지
+    if ctx.spray_fx is not None:
+        ctx.spray_fx.clear()   # [HMI v2] 스윕 중 도킹복귀로 끊겼으면 뜬 파티클 정리
     yield from g_stow_arm_for_nav(ctx)
     if ctx.holding_nozzle:
         print(f"[DOCK_RETURN][{ctx.name}] 노즐 보유 중 → 거치대 반납 후 복귀")
@@ -2330,6 +2336,8 @@ def main():
                     # process_state 는 정지 직전 라벨에 그대로 멈춰있어 프론트가 estop 상태를 못 봄
                     # (수동제어 잠금해제 조건에 필요, MapPanel.tsx 참고).
                     publish_hmi_state(tctx, "긴급정지")
+                    if tctx.spray_fx is not None:
+                        tctx.spray_fx.clear()   # [HMI v2] 분사 중 긴급정지 시 뜬 파티클 정리(보험 — g_spray_sweep 자체 체크도 있음)
             print(f"[ESTOP] 긴급정지 수신 → 정지 {targets}")
         elif cmd == "START":
             for t in targets:
