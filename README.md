@@ -85,6 +85,62 @@ isaac_python -m pip install -r src/perception/requirements.txt
   막힙니다. 이 에셋을 아직 못 구했다면, 관련 스크립트는 씬 스폰까지만 검증되고 그 이후 단계는
   라이브 실행이 안 됩니다 — 팀 내에서 이 파일을 공유받아야 해결됩니다.
 
+**⑥ `19_dual_task_select_yolo_integrated.py` 실행을 위한 `humble_ws` 쪽 설정**
+
+`humble_ws`(`~/IsaacSim-ros_workspaces/humble_ws`)는 `git remote`가 이 팀 저장소가 아니라
+NVIDIA 공식 `isaac-sim/IsaacSim-ros_workspaces`를 가리키고 있어서, 거기에 PR을 낼 수 없습니다.
+아래 파일들은 그 워크스페이스 자체 git으로는 추적이 안 되던(전부 untracked) 상태였는데, 유실
+방지용 참고 사본을 [`docs/humble_ws_config/`](docs/humble_ws_config/)에 넣어뒀습니다. 새
+머신이거나 `humble_ws`를 새로 클론했다면 이 폴더에서 원래 경로로 복사해 넣으면 됩니다
+(복사 명령은 [`docs/humble_ws_config/README.md`](docs/humble_ws_config/README.md) 참고).
+`carter_navigation` 패키지 특성상 **`src/`와 `install/share/`에 동일하게 있어야** `ros2 launch`가
+즉시 반영합니다(하나만 바꾸면 안 됨).
+
+- `carter_navigation/maps/map/modified_hospital_2_map.yaml` + `.png`
+  → 출처 = 이 레포의 `src/assets/map/modified_hospital_2_map.yaml`/`.png`(이미 git 추적됨,
+  그대로 복사, `docs/`에 중복 백업 안 함). `.yaml`의 `image:` 필드가 상대경로
+  (`modified_hospital_2_map.png`)라 같은 폴더에 두 파일 다 있어야 합니다(18-3 트러블슈팅 —
+  이거 하나 빠져서 맵 자체가 안 뜬 적 있음).
+- `carter_navigation/launch/multiple_robot_carter_navigation_modified_hospital.launch.py`
+  → 멀티로봇(carter1/carter2) Nav2 + 통합 RViz + tf_relay×2 + initialpose 자동발행을 한 번에
+  띄우는 launch 파일. `run_nav.sh`가 이걸 호출합니다. 백업: `docs/humble_ws_config/launch/`.
+- `carter_navigation/params/modified_hospital/multi_robot_carter_navigation_params_1.yaml`
+  (carter1용) / `..._params_2.yaml`(carter2용)
+  → AMCL/DWB/costmap 튜닝값 + `/carterN/` 토픽 접두 + `initial_pose`. carter1은
+  `(18.5, 0.2317, yaw 90°)`, carter2는 `(16.6629, 0.2287, yaw 90°)`로 19_의 스폰좌표와
+  일치해야 함(안 맞으면 AMCL이 처음부터 틀어짐 — 18-2 참고). 백업:
+  `docs/humble_ws_config/params/modified_hospital/`.
+- `carter_navigation/rviz2/carter_navigation_multi.rviz`
+  → 통합 RViz 설정(맵 공유 + 로봇별 Amcl/Costmap/Path + TF는 `carter1/base_link`·
+  `carter2/base_link` 2개만 표시하도록 필터링돼 있음, 2026-07-27 정리). 백업:
+  `docs/humble_ws_config/rviz2/`.
+
+⚠ `docs/humble_ws_config/`는 스냅샷입니다 — humble_ws 쪽에서 이 파일들을 다시 튜닝하면 이
+폴더는 자동으로 안 따라가니, 값이 바뀌면 실행 중인 머신 기준으로 다시 복사해 커밋해야 합니다.
+
+**환경변수(진단/ROS2 CLI 직접 사용 시 필수, 6-1·15-1 참고)** — 대화형 셸엔 `.bashrc`가 이미
+export해주지만, 비대화형 스크립트나 CI 등에서는 직접 지정해야 합니다. 아래는 **이 머신의 현재
+`.bashrc` 실측값**(예전 인수인계서 초안엔 `ROS_DOMAIN_ID=151`/`~/.ros/fastdds_whitelist.xml`로
+적혀 있었으나, 현재는 `net_loadtest` 격리망용으로 바뀌어 있음 — 실제 적용 중인 값 기준으로 작성):
+```bash
+export ROS_DOMAIN_ID=150
+export RMW_IMPLEMENTATION=rmw_fastrtps_cpp
+export FASTRTPS_DEFAULT_PROFILES_FILE="$HOME/.config/net_loadtest/fastdds_whitelist.xml"
+source /opt/ros/humble/setup.bash
+source ~/IsaacSim-ros_workspaces/humble_ws/install/setup.bash   # carter_navigation(Nav2)
+source ~/cobot3_ws/install/setup.bash                            # commander(미션/tf_relay/pc_reframe)
+```
+
+**실행 순서 (터미널 4개 이상)** — `run_isaac.sh`는 현재 `13_multi_robot_integrated.py`를 실행하도록
+돼 있어 `19_`용이 아닙니다. `19_`는 아래처럼 수동 실행:
+1. `ISAAC="$HOME/dev_ws/isaac_sim/isaacsim/_build/linux-x86_64/release"`
+   `LD_LIBRARY_PATH="$LD_LIBRARY_PATH:$ISAAC/exts/isaacsim.ros2.bridge/humble/lib" "$ISAAC/python.sh" isaacpjt/M0609/19_dual_task_select_yolo_integrated.py`
+   → 창 뜨면 Play ▶ (필수, `/clock` 시작)
+2. `./run_nav.sh` (Nav2 멀티 + 통합 RViz + tf_relay×2 + initialpose 자동, 위 humble_ws 파일들 전제)
+3. `./run_missions_19_hmi.sh` (미션 노드 2개 — 순수 Nav2 goal 릴레이)
+4. HMI v2 백엔드(`hmi/backend_v2`, :8001) + 프론트(:5174)
+5. (선택) YOLO 뷰어: `multi_robot_yolo_viewer.py --robots carter1 carter2`
+
 ## 📌 안내 
 ### 컴퓨터 켜서 작업 시작할 때: 
 무조건 git pull origin main을 먼저 해서 다른 팀원이 고친 최신 코드를 내 노트북으로 가져옵니다~!

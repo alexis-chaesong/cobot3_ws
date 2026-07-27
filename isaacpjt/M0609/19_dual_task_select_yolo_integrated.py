@@ -134,9 +134,22 @@ DRIVE_DAMPING = 1e4
 DRIVE_MAX_FORCE = 1e8
 ARM_JOINT_NAMES = [f"joint_{i}" for i in range(1, 7)]
 
-RENDER_EVERY = 2
-CAM_RENDER_W = 640
-CAM_RENDER_H = 400
+# [2대 동시구동 둔감함 완화, 실측: ENABLE_C2=0 단독은 15_ 수준으로 쾌적 → 순수 2배 구조비용 확정]
+# RENDER_EVERY↑ = 물리/제어(60Hz)는 그대로, 렌더+카메라/포인트클라우드 발행 주기만 늦춤(저위험).
+# env var 로 재빌드 없이 실험 가능(RS_PUBLISH_EVERY 와 동일 패턴).
+# [2026-07-27] 3으로 승격 시도했다가, 라이브에서 캐스터 보정 저하 + RS_ON=1 과 결합 시 악화 발견
+# → 4는 더 심해짐(사용자 실측) → 2로 고정. RENDER_EVERY 값 자체가 캐스터/카메라 스톨과 얽히는
+# 부작용이 있는 것으로 보여 3 이상은 당분간 권장하지 않음.
+RENDER_EVERY = int(os.environ.get("RENDER_EVERY", "2"))
+# [2026-07-27] RENDER_EVERY 는 2로 고정(캐스터 부작용) → 대신 "매 렌더당 비용" 자체를 줄이는 쪽으로.
+# CAM_DEACTIVATE_UNUSED 로 11개는 이미 꺼져있어서, 실제로 매 렌더마다 무거운 카메라는 front_hawk
+# (YOLO 뷰어 기본 구독 대상) 하나뿐 — 이 해상도를 낮추는 게 스텝 타이밍(캐스터와 얽힌 원인)은
+# 안 건드리면서 "개별 렌더+읽기 작업의 소요시간"(픽셀수 비례, GPU 평균사용률과는 별개 축)을 줄이는
+# 저위험 레버. 라이브 실측 : 640x400→480x300 만으로도 캐스터 보정 체감 개선 확인 → 320x240 으로
+# 추가 축소. YOLO 자체가 입력을 imgsz=640 으로 리사이즈해서 쓰므로 소스 해상도를 낮춰도 감지 품질
+# 손해는 제한적일 것으로 예상(라이브에서 감지율 저하 없는지 확인 필요).
+CAM_RENDER_W = int(os.environ.get("CAM_RENDER_W", "320"))
+CAM_RENDER_H = int(os.environ.get("CAM_RENDER_H", "240"))
 # [19_ GPU 절감] Nova Carter 내장 카메라 12개(hawk 8+owl 4) 중 front_hawk 만 실사용(외부 YOLO
 # 뷰어 기본값 front_stereo_camera/left) — 그 외(front_hawk 의 right 포함, right/left/back_hawk,
 # owl)는 아무도 안 봄. keep_full_res 패턴에 안 걸리는 카메라는 CAM_RENDER_W/H 대신 이 극소
@@ -144,6 +157,12 @@ CAM_RENDER_H = 400
 CAM_KEEP_FULL_RES = ("front_hawk",)
 CAM_MINIMIZE_W = 16
 CAM_MINIMIZE_H = 16
+# 16x16 으로 줄여도 render product 자체는 여전히 매 프레임 평가된다 — 아무도 안 보는 11개(owl 4 +
+# hawk 3방향)를 통째로 SetActive(False) 하면(해당 OmniGraph 노드 1개만 비활성화, 그래프 나머지는
+# 안 건드림) 렌더 패스 자체가 안 돎 → 해상도 축소보다 더 아낌. [2026-07-27] 헤드리스 스모크테스트
+# (씬 빌드/ROS2 브리지 부작용 없음) + 라이브 검증(쾌적함 체감) 완료돼 기본값으로 승격.
+# CAM_DEACTIVATE_UNUSED=0 으로 끄면 기존(16x16 축소만) 동작으로 되돌아감.
+CAM_DEACTIVATE_UNUSED = os.environ.get("CAM_DEACTIVATE_UNUSED", "1") == "1"
 
 NS_CARTER1 = "carter1"
 NS_CARTER2 = "carter2"
@@ -340,7 +359,14 @@ HOME2_XY = np.array([C2_START_POSE["x"], C2_START_POSE["y"]])
 HOME2_YAW = np.radians(C2_START_POSE["yaw_deg"])
 
 # Surface Gripper 튜닝(15_/16_ 검증값 — grip_travel 을 IK 접근오차보다 넉넉히, clearance 는 최소).
-MAX_GRIP_DISTANCE = 0.04
+# [2026-07-27 재보정] MAX_GRIP_DISTANCE=0.04(4cm) 는 D6 조인트 컴플라이언스(GRIP_TRAVEL=1.5cm)
+# 보다 훨씬 넉넉해서, 트래시 크립(게이팅 없음, 매 스텝 즉시 grip 시도)이 물체에서 최대 4cm 떨어진
+# 상태로도 바로 잡혀버려 눈에 띄는 틈이 남는 원인이 됐다(사용자 라이브 관찰). 노즐 쪽은 이미
+# TC_CREEP_GRIP_ATTEMPT_RADIUS=GRIP_TRAVEL(1.5cm)로 게이팅해뒀으니, 이 물리적 그립범위 자체도
+# GRIP_TRAVEL 과 맞춰 — "조인트가 실제로 컴플라이언스로 흡수할 수 있는 거리 안에서만 잡힌다"로
+# 통일(기하 추정 불필요, 하드 물리 제약이라 안전). 노즐은 기존 게이팅과 값이 같아져 동작 변화 없음,
+# 트래시는 게이팅이 없던 채로 그립 자체가 더 가까워야만 성공하게 돼 틈이 줄어들 것으로 기대.
+MAX_GRIP_DISTANCE = 0.015
 GRIP_DRIVE_STIFFNESS = 5000.0
 GRIP_DRIVE_DAMPING = 100.0
 CLEARANCE_OFFSET = 0.0005
@@ -356,6 +382,20 @@ TC_REDOCK_SETTLE_STEPS = 20
 TC_JOINT_RAMP_STEPS = 200
 TC_IK_RETRY_COUNT = 2   # [2026-07-26] IK 실패 시 그 자리(챠시 이동 없음)에서 재시도 횟수(최대 3회 시도)
 TC_TARGET_BIAS_COMPENSATION = np.array([0.006, -0.0003, 0.0])   # URDF-USD 형상 불일치 고정 바이어스
+# [2026-07-27 재보정 추가] IK 1회 솔브(_tc_solve_and_ramp)만으로는 챠시 접근 오차(Nav2 핸드오프
+# 오차)가 그대로 그립 실패로 이어지는 구조적 약점이 있었다(38mm 오차 실측, g_tool_change_grasp
+# 참고). g_trash_mission 의 검증된 크립(creep) 패턴을 그대로 이식 — 실측 handle_position 을 향해
+# RMPflow 로 짧게 끊어 다가가며(매 스텝 settle) 재그립 시도. 트래시와 동일 해상도(5mm)로 시작,
+# 최대거리(200mm)는 트래시(300mm)보다 좁게(관측된 부족분 38mm 대비 5배 여유).
+TC_CREEP_STEP_SIZE = 0.005
+TC_CREEP_MAX_STEPS = 40
+TC_CREEP_SETTLE_STEPS = 5
+# [2026-07-27 라이브 피드백] 크립 첫 스텝부터 매번 grip 을 시도하면, MAX_GRIP_DISTANCE(0.04m) 범위에
+# "막 들어온" 먼 지점(가장자리)에서 바로 잡혀버려 노즐이 손끝 중심이 아니라 팔 가장자리에 붙은
+# 것처럼 보이는 문제 발견 — target(handle_position)에 이 반경 안으로 들어올 때까지는 grip 을
+# 시도하지 않고 계속 다가가기만 한다. GRIP_TRAVEL(D6 조인트 컴플라이언스 범위)과 동일값으로
+# 시작 — 그 범위 안에서 잡히면 자연스러운 자세로 보정될 여지가 있다.
+TC_CREEP_GRIP_ATTEMPT_RADIUS = 0.015
 
 WALL_X = 0.575
 AIM_Y = 0.0
@@ -476,6 +516,10 @@ RS_OFFSET = Gf.Vec3d(0.0, -0.30, 0.35)              # chassis 기준 우측(-Y)�
 RS_RESOLUTION = (320, 240)      # ★YOLO용★ 저해상도(근접 사람 감지엔 충분, render product 부담↓)
 RS_FOCAL = 14.0                                    # mm. ↓=광각(가까운 사람 잘 봄) / ↑=협각
 RS_PUBLISH_EVERY = int(os.environ.get("RS_PUBLISH_EVERY", "15"))  # 메인 루프 N스텝마다 1프레임 발행
+# [2026-07-27 시도·롤백] RS_PUBLISH_EVERY(15)가 RENDER_EVERY(3)의 배수라 읽기 스텝이 항상 렌더
+# 트리거 스텝과 겹친다는 점에 착안, 렌더와 안 겹치게 읽기를 몇 스텝 늦추는 RS_READ_DELAY_STEPS 를
+# 시도했으나 라이브 실측 결과 캐스터 보정이 오히려 더 나빠져 롤백함(가설 반증 또는 역효과가 더 큼,
+# 원인 미확정) — 코드는 원래(렌더 스텝과 겹쳐도 그냥 읽음) 방식 그대로.
 
 C2_CHASSIS = C2_ARTICULATION_ROOT   # camera 부착 기준(C1_CHASSIS 와 대칭)
 C1_RS_PRIM = f"{C1_CHASSIS}/realsense_3oclock"
@@ -522,7 +566,8 @@ def set_carter_namespace(root_path, ns):
     return n
 
 
-def set_camera_resolution(root_path, width, height, keep_full_res=(), minimize_w=None, minimize_h=None):
+def set_camera_resolution(root_path, width, height, keep_full_res=(), minimize_w=None, minimize_h=None,
+                          deactivate_unused=False):
     """[19_ GPU 절감] Nova Carter 내장 카메라 render product 12개(hawk 4방향×L/R=8 + owl 4) 중
     실제로 구독되는 건 front_hawk 의 left 뿐(외부 YOLO 뷰어 기본값 front_stereo_camera/left/
     image_raw) — 나머지(front_hawk 의 right, right/left/back_hawk 전부, owl 전부)는 아무도
@@ -530,12 +575,17 @@ def set_camera_resolution(root_path, width, height, keep_full_res=(), minimize_w
     keep_full_res 에 담긴 문자열이 prim 경로에 포함되면(예: "front_hawk") width/height 그대로
     유지, 그 외는 minimize_w/h(지정 시)로 대폭 축소 — OmniGraph 구조는 안 건드리고 해상도만
     낮추는 저위험 접근(사용자 결정). keep_full_res 를 안 주면 기존과 동일하게 전부 width/height
-    로 축소(하위호환)."""
+    로 축소(하위호환).
+    [실험적] deactivate_unused=True 면, 축소 대상(미사용) render product 노드를 해상도 조정에
+    더해 prim.SetActive(False) 로 통째 비활성화한다 — 16x16 이어도 여전히 매 프레임 평가되는
+    render product 자체를 꺼서 더 아낄 수 있는지 실험(CAM_DEACTIVATE_UNUSED 로 옵트인, 기본 False
+    면 기존 동작과 완전히 동일). PrimRange 순회 중 SetActive 호출은 순회 자체에 영향을 줄 수 있어
+    먼저 대상 목록을 다 모은 뒤에 일괄 적용한다."""
     if not width or not height:
         return 0
     stage = omni.usd.get_context().get_stage()
     root = stage.GetPrimAtPath(root_path)
-    n_full = 0; n_min = 0
+    full_prims = []; min_prims = []
     for prim in Usd.PrimRange(root):
         nm = prim.GetName()
         is_cam_rp = ("camera_render_product" in nm) or (nm == "isaac_create_render_product")
@@ -546,14 +596,22 @@ def set_camera_resolution(root_path, width, height, keep_full_res=(), minimize_w
             continue
         path_str = str(prim.GetPath()).lower()
         if keep_full_res and any(pat.lower() in path_str for pat in keep_full_res):
-            wa.Set(int(width)); ha.Set(int(height)); n_full += 1
+            full_prims.append((prim, wa, ha))
         elif minimize_w and minimize_h:
-            wa.Set(int(minimize_w)); ha.Set(int(minimize_h)); n_min += 1
+            min_prims.append((prim, wa, ha))
         else:
-            wa.Set(int(width)); ha.Set(int(height)); n_full += 1
+            full_prims.append((prim, wa, ha))
+    for prim, wa, ha in full_prims:
+        wa.Set(int(width)); ha.Set(int(height))
+    for prim, wa, ha in min_prims:
+        wa.Set(int(minimize_w)); ha.Set(int(minimize_h))
+        if deactivate_unused:
+            prim.SetActive(False)
+    n_full = len(full_prims); n_min = len(min_prims)
     if minimize_w and minimize_h:
+        tag = " (+비활성화)" if deactivate_unused else ""
         print(f"[GPU] {root_path} 카메라 render product : 유지 {n_full}개 → {width}x{height}, "
-              f"미사용 축소 {n_min}개 → {minimize_w}x{minimize_h}")
+              f"미사용 축소 {n_min}개 → {minimize_w}x{minimize_h}{tag}")
     else:
         print(f"[GPU] {root_path} 카메라 render product {n_full}개 → {width}x{height} 로 축소")
     return n_full + n_min
@@ -817,7 +875,8 @@ def build_carter1():
 
     set_carter_namespace(C1_CARTER_PRIM, NS_CARTER1)
     set_camera_resolution(C1_CARTER_PRIM, CAM_RENDER_W, CAM_RENDER_H,
-                          keep_full_res=CAM_KEEP_FULL_RES, minimize_w=CAM_MINIMIZE_W, minimize_h=CAM_MINIMIZE_H)
+                          keep_full_res=CAM_KEEP_FULL_RES, minimize_w=CAM_MINIMIZE_W, minimize_h=CAM_MINIMIZE_H,
+                          deactivate_unused=CAM_DEACTIVATE_UNUSED)
     print("[SCENE] carter1 (Nova + Surface Gripper 팔, 쓰레기통 비활성) 완료")
     return True
 
@@ -876,7 +935,8 @@ def build_carter2():
 
     set_carter_namespace(C2_SCOPE_PRIM, NS_CARTER2)
     set_camera_resolution(C2_SCOPE_PRIM, CAM_RENDER_W, CAM_RENDER_H,
-                          keep_full_res=CAM_KEEP_FULL_RES, minimize_w=CAM_MINIMIZE_W, minimize_h=CAM_MINIMIZE_H)
+                          keep_full_res=CAM_KEEP_FULL_RES, minimize_w=CAM_MINIMIZE_W, minimize_h=CAM_MINIMIZE_H,
+                          deactivate_unused=CAM_DEACTIVATE_UNUSED)
     print("[SCENE] carter2 (Nova + Surface Gripper 팔 + 공용 쓰레기통) 완료")
     return True
 
@@ -1292,11 +1352,17 @@ def g_hold_pose(ctx, target_position, target_orientation, steps):
             target_end_effector_position=target_position, target_end_effector_orientation=target_orientation))
 
 
-def g_rotate_in_place(ctx, target_yaw, kp, kd, w_max, max_w_step, tol, chassis_path, max_steps=600):
+def g_rotate_in_place(ctx, target_yaw, kp, kd, w_max, max_w_step, tol, chassis_path, max_steps=600,
+                      force_direction=None):
     """[19_ 병합] Nav2 가 관여 안 하는 순수 스크립트 주행 구간이라, 사람감지(YOLO)/긴급정지(HMI) 를
     여기서 직접 게이팅한다 — 둘 다 '제자리 정지'로 동일 처리(전진 없이 이 스텝만 건너뜀, 상태는
     그대로 유지해 재개 시 이어서 진행). ctx.person_gate/ctx.estop_flags 가 None 이면(카메라
-    비활성/HMI 미연결) 무해하게 통과."""
+    비활성/HMI 미연결) 무해하게 통과.
+    [2026-07-27] force_direction="cw"/"ccw" — 기본(None)은 wrap_pi 로 최단경로를 따라가는데,
+    target_yaw 가 현재 yaw 와 정확히 180도 차이(예: 후진+180도 회전)면 wrap_pi(diff) 의 부호가
+    +π/-π 경계에서 부동소수점 오차로 실행마다 뒤바뀌어 회전방향이 무작위로 보임(사용자 관찰) —
+    force_direction 지정 시 그 방향이 되도록 오차를 2π 만큼 밀어서 부호를 강제한다(목표 각도
+    자체는 그대로, 최단경로가 아닐 수 있음)."""
     prev_yaw = get_chassis_yaw(chassis_path); w_applied = 0.0; settled = 0
     for _ in range(max_steps):
         yield
@@ -1306,6 +1372,10 @@ def g_rotate_in_place(ctx, target_yaw, kp, kd, w_max, max_w_step, tol, chassis_p
             continue
         yaw = get_chassis_yaw(chassis_path)
         yaw_err = wrap_pi(target_yaw - yaw)
+        if force_direction == "cw" and yaw_err > 0:
+            yaw_err -= 2.0 * np.pi
+        elif force_direction == "ccw" and yaw_err < 0:
+            yaw_err += 2.0 * np.pi
         yaw_rate = wrap_pi(yaw - prev_yaw) / PHYSICS_DT
         prev_yaw = yaw
         if abs(yaw_err) < tol:
@@ -1517,9 +1587,30 @@ def _tc_solve_and_ramp(ctx, ik, target_pos, target_ori, warm_start, ramp_steps, 
     return q6, True
 
 
+def g_creep_to(ctx, target_pos, target_ori, step_size=TC_CREEP_STEP_SIZE, settle_steps=TC_CREEP_SETTLE_STEPS,
+               max_steps=200, tol=0.003):
+    """[2026-07-27 재보정 추가] 현재 손끝 위치에서 target_pos 까지 RMPflow 로 작은 스텝씩(그립 시도
+    없이) 이동만 한다 — 노즐 크립 재시도에서 "안전 고도로 들어올림"/"고도 유지한 채 수평이동" 구간에
+    공용으로 쓴다(수직 하강+그립 재시도는 호출부가 별도로 처리)."""
+    current = get_prim_world_position(ctx.ee_path)
+    for _ in range(max_steps):
+        to_target = np.asarray(target_pos) - current
+        dist = float(np.linalg.norm(to_target))
+        if dist <= tol:
+            return
+        current = current + to_target / dist * min(step_size, dist)
+        for _ in range(settle_steps):
+            yield
+            ctx.robot.apply_action(ctx.rmpflow.forward(
+                target_end_effector_position=current, target_end_effector_orientation=target_ori))
+
+
 def g_tool_change_grasp(ctx):
     """자기 전용 거치대(ctx.tool_path/dock_xy)에서 노즐 파지. 성공 시 ctx.holding_nozzle=True,
-    ctx.nozzle_tip_offset 갱신. 반환값 = grasp_ok(bool)."""
+    ctx.nozzle_tip_offset 갱신. 반환값 = grasp_ok(bool).
+    [2026-07-27] IK 1회 솔브("노즐 하강") 직후 그립이 바로 안 되면, g_trash_mission 의 크립(creep)
+    패턴을 이식해 RMPflow 로 실측 handle_position 을 향해 조금씩 다가가며 재시도한다(TC_CREEP_*).
+    챠시 접근(Nav2 핸드오프) 오차가 보정 없이 그대로 IK 목표 오차로 전달되던 구조적 약점을 흡수."""
     tc = ctx.tool_changer
     handle_position, handle_orientation = tc.approach_tool_stand()
     base_pos, base_quat = read_world_pose(f"{ctx.arm_root}/base_link")
@@ -1540,9 +1631,56 @@ def g_tool_change_grasp(ctx):
     for _ in range(TC_GRASP_SETTLE_STEPS):
         yield
     if not tc.surface_gripper.is_closed():
-        print(f"[TOOLCHANGE][{ctx.name}][FAIL] 노즐 파지 실패")
-        yield from g_ramp_to_joint_positions(ctx, np.degrees(q_above), TC_JOINT_RAMP_STEPS)
-        return False
+        # [2026-07-27 재보정 추가] IK 1회 솔브가 챠시 접근오차(Nav2 핸드오프 오차)를 그대로 물려받아
+        # 그립범위(MAX_GRIP_DISTANCE=0.04m)를 놓친 경우 — g_trash_mission 의 크립(creep) 패턴을 그대로
+        # 이식해 실측 handle_position 을 향해 RMPflow 로 조금씩 다가가며 매 스텝 재그립 시도.
+        # [2026-07-27 라이브 사고 대응] "노즐 하강" 직후(=이미 손잡이 높이) 상태 그대로 옆으로
+        # 크립하면 hold_joint 로 아직 고정돼 있는 노즐 본체와 부딪혀 챠시까지 흔들리는 사고가
+        # 실제로 발생함 — 반드시 "상공 접근"과 같은 안전 고도로 먼저 들어올린 뒤(1), 그 고도를
+        # 유지한 채 XY 만 목표 바로 위로 맞추고(2), 마지막에 그 자리서 수직으로만 하강(3)한다.
+        print(f"[TOOLCHANGE][{ctx.name}][WARN] 노즐 하강 직후 파지 실패 — 크립 재시도 시작 "
+              f"(최대 {TC_CREEP_MAX_STEPS}스텝×{TC_CREEP_STEP_SIZE * 1000:.0f}mm)")
+        handle_position_arr = np.asarray(handle_position)
+        lift_target = handle_position_arr + TC_EE_OFFSET
+
+        print(f"[TOOLCHANGE][{ctx.name}] 크립 1/3: 안전 고도로 들어올림")
+        yield from g_creep_to(ctx, lift_target, handle_orientation)
+
+        print(f"[TOOLCHANGE][{ctx.name}] 크립 2/3: 고도 유지한 채 목표 바로 위로 수평이동")
+        above_target = np.array([handle_position_arr[0], handle_position_arr[1], lift_target[2]])
+        yield from g_creep_to(ctx, above_target, handle_orientation)
+
+        print(f"[TOOLCHANGE][{ctx.name}] 크립 3/3: 목표 위에서 수직 하강하며 재그립")
+        creep_start = get_prim_world_position(ctx.ee_path)
+        to_handle = handle_position_arr - creep_start
+        remaining = float(np.linalg.norm(to_handle))
+        creep_dir = to_handle / remaining if remaining > 1e-6 else np.array([0.0, 0.0, -1.0])
+        current_target = creep_start.copy()
+        gripped_ok = False
+        for creep_step in range(TC_CREEP_MAX_STEPS):
+            current_target = current_target + creep_dir * TC_CREEP_STEP_SIZE
+            for _ in range(TC_CREEP_SETTLE_STEPS):
+                yield
+                ctx.robot.apply_action(ctx.rmpflow.forward(
+                    target_end_effector_position=current_target, target_end_effector_orientation=handle_orientation))
+            # [2026-07-27] target 에 TC_CREEP_GRIP_ATTEMPT_RADIUS 안으로 들어오기 전엔 grip 을 시도하지
+            # 않는다 — 그립범위(0.04m) 가장자리에서 바로 잡혀 노즐이 삐딱하게 붙는 것 방지.
+            remaining_now = float(np.linalg.norm(handle_position_arr - current_target))
+            if remaining_now > TC_CREEP_GRIP_ATTEMPT_RADIUS:
+                continue
+            tc.surface_gripper.close()
+            if tc.surface_gripper.is_closed():
+                gripped_ok = True
+                traveled_mm = float(np.linalg.norm(current_target - creep_start)) * 1000
+                print(f"[TOOLCHANGE][{ctx.name}] 크립 파지 성공 (creep {creep_step + 1}/{TC_CREEP_MAX_STEPS}, "
+                      f"누적 이동={traveled_mm:.1f}mm, 목표까지 잔여={remaining_now * 1000:.1f}mm)")
+                break
+        if not gripped_ok:
+            print(f"[TOOLCHANGE][{ctx.name}][FAIL] 노즐 파지 실패 "
+                  f"(크립 {TC_CREEP_MAX_STEPS}회 소진, {TC_CREEP_MAX_STEPS * TC_CREEP_STEP_SIZE * 1000:.0f}mm "
+                  f"이내 그립 안 됨)")
+            yield from g_ramp_to_joint_positions(ctx, np.degrees(q_above), TC_JOINT_RAMP_STEPS)
+            return False
 
     release_hold_joint(ctx.stage, ctx.hold_joint_path)
     for _ in range(10):
@@ -1896,7 +2034,11 @@ def g_trash_mission(ctx):
     lateral_err = float(np.linalg.norm(lateral_vec))
     print(f"[INFO][{ctx.name}] 실측 쓰레기통={trash_now}, 수직오차={lateral_err:.3f}m")
     if LATERAL_CORRECTION_MIN < lateral_err <= LATERAL_CORRECTION_MAX:
-        yield from g_move_to_pose(ctx, grasp_position + lateral_vec, grasp_orientation, "좌우/높이 보정")
+        # [2026-07-27] MAX_GRIP_DISTANCE 를 1.5cm 로 좁혔으므로, 이후 깊이(depth) 크립만으로는
+        # 못 고치는 좌우/상하 잔여오차가 기본 POSITION_TOLERANCE(3cm)보다 타이트해야 그립범위
+        # 안에 들어온다 — 여기서만 1cm 로 좁혀서(그립범위 대비 5mm 여유) 호출.
+        yield from g_move_to_pose(ctx, grasp_position + lateral_vec, grasp_orientation, "좌우/높이 보정",
+                                  position_tolerance=0.01)
         grasp_position = get_prim_world_position(ctx.tool0_path)
     elif lateral_err > LATERAL_CORRECTION_MAX:
         print(f"[WARN][{ctx.name}] 수직오차 과대({lateral_err:.3f}m) → 보정 생략")
@@ -1991,9 +2133,11 @@ def g_trash_mission(ctx):
     yield from g_drive_straight_open_loop(ctx, POST_RETURN_BACKUP_DISTANCE, ctx.articulation_root,
                                           FINAL_APPROACH_SPEED, reverse=True)
     post_ret_yaw = wrap_pi(get_chassis_yaw(ctx.articulation_root) + np.pi)
+    # [2026-07-27 사용자 요청] 쓰레기통 두고 후진 후 180도 회전은 항상 시계방향으로.
     yield from g_rotate_in_place(ctx, post_ret_yaw, FINAL_ROTATE_KP, FINAL_ROTATE_KD, FINAL_ROTATE_W_MAX,
-                                 FINAL_ROTATE_MAX_W_STEP, FINAL_ROTATE_TOLERANCE_RAD, ctx.articulation_root)
-    print(f"[APPROACH:RETURN][{ctx.name}] {POST_RETURN_BACKUP_DISTANCE:.2f}m 후진 + 180 회전 완료")
+                                 FINAL_ROTATE_MAX_W_STEP, FINAL_ROTATE_TOLERANCE_RAD, ctx.articulation_root,
+                                 force_direction="cw")
+    print(f"[APPROACH:RETURN][{ctx.name}] {POST_RETURN_BACKUP_DISTANCE:.2f}m 후진 + 180 회전(시계방향) 완료")
     print(f"[INFO][{ctx.name}] 트래시 미션 완료(파지+덤프+원위치복귀).")
     ctx.status = "트래시 완료 — IDLE 복귀"
 
@@ -2213,7 +2357,8 @@ def main():
     en_c2 = os.environ.get("ENABLE_C2", "1") == "1"
     en_people = os.environ.get("ENABLE_PEOPLE", "1") == "1"   # ★YOLO 병합★ 사람 배치 토글
     print(f"[CFG] ENABLE_C1={en_c1} ENABLE_C2={en_c2} ENABLE_PEOPLE={en_people} "
-          f"RS_ON={RS_ON} RS_PUBLISH_EVERY={RS_PUBLISH_EVERY}")
+          f"RS_ON={RS_ON} RS_PUBLISH_EVERY={RS_PUBLISH_EVERY} RENDER_EVERY={RENDER_EVERY} "
+          f"CAM_DEACTIVATE_UNUSED={CAM_DEACTIVATE_UNUSED}")
 
     my_world = World(stage_units_in_meters=1.0, physics_dt=PHYSICS_DT, rendering_dt=PHYSICS_DT)
     stage = omni.usd.get_context().get_stage()
@@ -2484,6 +2629,9 @@ def main():
             rclpy.spin_once(ros_node, timeout_sec=0.0)
 
             # ★YOLO 병합★ N스텝마다 우측 RealSense 프레임 발행(뷰어가 구독해 YOLO 추론).
+            # [2026-07-27] RS_READ_DELAY_STEPS(렌더 스텝과 안 겹치게 읽기를 늦추는 시도)를 라이브
+            # 실측했더니 캐스터 보정이 오히려 더 나빠져서 롤백 — 가설(스톨 감소)이 틀렸거나 최소한
+            # 역효과가 더 컸다. 원인은 아직 미확정, 원래(렌더 스텝과 겹쳐도 됨) 방식으로 복귀.
             if step_i % RS_PUBLISH_EVERY == 0:
                 publish_realsense_frame(c1_rs_cam, c1_rs_pub, C1_RS_FRAME_ID, t)
                 publish_realsense_frame(c2_rs_cam, c2_rs_pub, C2_RS_FRAME_ID, t)
