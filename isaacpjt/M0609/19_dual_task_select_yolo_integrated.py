@@ -86,6 +86,7 @@ from pathlib import Path
 import numpy as np
 import omni.usd
 import omni.timeline
+import omni.graph.core as og
 from pxr import Usd, UsdGeom, UsdPhysics, UsdLux, Sdf, Gf, Vt
 
 from isaacsim.core.api import World
@@ -751,6 +752,38 @@ def boost_drive_limits(carter_prim_path):
                 if a and a.IsValid():
                     a.Set(float(val)); n += 1
     print(f"[DRIVE] {carter_prim_path} 차동구동 클램프 상향 attr {n}")
+
+
+def setup_ros2_camera_publisher(camera_prim_path, topic_name, frame_id, resolution, graph_path):
+    """isaacsim.ros2.bridge 의 ROS2 Camera Helper OmniGraph를 코드로 구성해
+    카메라 이미지를 sensor_msgs/Image 로 백그라운드에서 발행합니다 (get_rgb 스톨 방지)."""
+    import omni.graph.core as og
+    keys = og.Controller.Keys
+    (graph, _, _, _) = og.Controller.edit(
+        {"graph_path": graph_path, "evaluator_name": "execution"},
+        {
+            keys.CREATE_NODES: [
+                ("OnTick", "omni.graph.action.OnPlaybackTick"),
+                ("CreateRenderProduct", "isaacsim.core.nodes.IsaacCreateRenderProduct"),
+                ("CameraHelperRGB", "isaacsim.ros2.bridge.ROS2CameraHelper"),
+            ],
+            keys.CONNECT: [
+                ("OnTick.outputs:tick", "CreateRenderProduct.inputs:execIn"),
+                ("CreateRenderProduct.outputs:execOut", "CameraHelperRGB.inputs:execIn"),
+                ("CreateRenderProduct.outputs:renderProductPath", "CameraHelperRGB.inputs:renderProductPath"),
+            ],
+            keys.SET_VALUES: [
+                ("CreateRenderProduct.inputs:cameraPrim", camera_prim_path),
+                ("CreateRenderProduct.inputs:width", resolution[0]),
+                ("CreateRenderProduct.inputs:height", resolution[1]),
+                ("CameraHelperRGB.inputs:topicName", topic_name),
+                ("CameraHelperRGB.inputs:frameId", frame_id),
+                ("CameraHelperRGB.inputs:type", "rgb"),
+            ],
+        },
+    )
+    print(f"[RS] OmniGraph Camera Helper 생성 완료: {graph_path} -> {topic_name}")
+    return graph
 
 
 def tune_arm_drives(root_path):
@@ -2427,22 +2460,17 @@ def main():
     # 상태에 등록하는데, reset() 이 그 상태를 갈아엎은 뒤 등록하면 render product 가 카메라와
     # 제대로 안 붙어 cam.get_rgb() 가 계속 None/구값만 반환할 수 있다(예외 없이 조용히 실패 —
     # 웹 비전 패널이 "YOLO 인식엔 문제 없어 보이는데 화면만 안 뜨는" 것처럼 보이는 근본 원인).
-    c1_rs_cam = None
     if c1_rs_path is not None:
         try:
-            c1_rs_cam = Camera(prim_path=c1_rs_path, name="c1_realsense",
-                               resolution=RS_RESOLUTION, frequency=30)
+            setup_ros2_camera_publisher(c1_rs_path, C1_RS_TOPIC, C1_RS_FRAME_ID, RS_RESOLUTION, "/World/C1_CameraGraph")
         except Exception:
-            print("[RS][carter1][WARN] Camera 래퍼 생성 실패 — 비활성 처리")
-            c1_rs_cam = None
-    c2_rs_cam = None
+            print("[RS][carter1][WARN] OmniGraph Camera 생성 실패")
+            
     if c2_rs_path is not None:
         try:
-            c2_rs_cam = Camera(prim_path=c2_rs_path, name="c2_realsense",
-                               resolution=RS_RESOLUTION, frequency=30)
+            setup_ros2_camera_publisher(c2_rs_path, C2_RS_TOPIC, C2_RS_FRAME_ID, RS_RESOLUTION, "/World/C2_CameraGraph")
         except Exception:
-            print("[RS][carter2][WARN] Camera 래퍼 생성 실패 — 비활성 처리")
-            c2_rs_cam = None
+            print("[RS][carter2][WARN] OmniGraph Camera 생성 실패")
 
     c1_robot = c1_ee_path = c1_tool0_path = None
     if en_c1:
@@ -2461,26 +2489,7 @@ def main():
     for _ in range(5):
         my_world.step(render=False)
 
-    # ★YOLO 병합★ reset 이후엔 초기화+워밍업만(래퍼는 위에서 이미 reset 전에 생성됨). 실패해도
-    # 해당 로봇만 None 폴백 — 다른 로봇/미션 진행에는 영향 없음(18_ 관례).
-    if c1_rs_cam is not None:
-        try:
-            c1_rs_cam.initialize()
-            for _ in range(30):
-                my_world.step(render=True)
-            print(f"[RS][carter1] 카메라 초기화 완료 ({RS_RESOLUTION[0]}x{RS_RESOLUTION[1]})")
-        except Exception:
-            print("[RS][carter1][WARN] 카메라 초기화 실패 — 비활성 처리")
-            c1_rs_cam = None
-    if c2_rs_cam is not None:
-        try:
-            c2_rs_cam.initialize()
-            for _ in range(30):
-                my_world.step(render=True)
-            print(f"[RS][carter2] 카메라 초기화 완료 ({RS_RESOLUTION[0]}x{RS_RESOLUTION[1]})")
-        except Exception:
-            print("[RS][carter2][WARN] 카메라 초기화 실패 — 비활성 처리")
-            c2_rs_cam = None
+
 
     rclpy.init()
     ros_node = rclpy.create_node("dual_task_select_yolo_controller")
@@ -2549,14 +2558,7 @@ def main():
     c1_gate = PersonGate(ros_node, C1_PERSON_ALERT, my_world, "carter1") if en_c1 else None
     c2_gate = PersonGate(ros_node, C2_PERSON_ALERT, my_world, "carter2") if en_c2 else None
 
-    _img_qos = QoSProfile(reliability=ReliabilityPolicy.BEST_EFFORT,
-                          history=HistoryPolicy.KEEP_LAST, depth=1)
-    c1_rs_pub = ros_node.create_publisher(RosImage, C1_RS_TOPIC, _img_qos) if c1_rs_cam is not None else None
-    c2_rs_pub = ros_node.create_publisher(RosImage, C2_RS_TOPIC, _img_qos) if c2_rs_cam is not None else None
-    if c1_rs_pub is not None:
-        print(f"[RS][carter1] 이미지 발행 준비: {C1_RS_TOPIC} (BEST_EFFORT)")
-    if c2_rs_pub is not None:
-        print(f"[RS][carter2] 이미지 발행 준비: {C2_RS_TOPIC} (BEST_EFFORT)")
+
 
     trash_lock = {"holder": None}
     spray_lock = {"holder": None}
@@ -2668,13 +2670,7 @@ def main():
             clock_pub.publish(cmsg)
             rclpy.spin_once(ros_node, timeout_sec=0.0)
 
-            # ★YOLO 병합★ N스텝마다 우측 RealSense 프레임 발행(뷰어가 구독해 YOLO 추론).
-            # [2026-07-27] RS_READ_DELAY_STEPS(렌더 스텝과 안 겹치게 읽기를 늦추는 시도)를 라이브
-            # 실측했더니 캐스터 보정이 오히려 더 나빠져서 롤백 — 가설(스톨 감소)이 틀렸거나 최소한
-            # 역효과가 더 컸다. 원인은 아직 미확정, 원래(렌더 스텝과 겹쳐도 됨) 방식으로 복귀.
-            if step_i % RS_PUBLISH_EVERY == 0:
-                publish_realsense_frame(c1_rs_cam, c1_rs_pub, C1_RS_FRAME_ID, t)
-                publish_realsense_frame(c2_rs_cam, c2_rs_pub, C2_RS_FRAME_ID, t)
+
 
             if not my_world.is_playing():
                 continue
