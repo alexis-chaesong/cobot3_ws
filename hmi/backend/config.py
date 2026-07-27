@@ -22,11 +22,11 @@ class Settings:
 
 
     # 자유 클릭 내비게이션 맵(Nav2 가 실제로 쓰는 맵과 동일해야 amcl_pose/goal 좌표가 일치).
-    # 13/16번 Isaac 스크립트의 Nav2 런치가 쓰는 modified_hospital_map.yaml 을 기본값으로.
+    # run_nav.sh 가 쓰는 modified_hospital_2_map.yaml 을 기본값으로(2026-07-26, 병원맵 교체).
     map_yaml_path: str = os.getenv(
         "HMI_MAP_YAML",
         "/home/rokey/IsaacSim-ros_workspaces/humble_ws/src/navigation/"
-        "carter_navigation/maps/map/modified_hospital_map.yaml",
+        "carter_navigation/maps/map/modified_hospital_2_map.yaml",
     )
 
 

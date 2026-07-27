@@ -34,9 +34,13 @@ export default function App() {
         <MapPanel />
 
         {/* 모니터링 — 로봇 부착 카메라 1개, 중앙 정렬.
-            streamUrl 미지정 → placeholder 표시. 실제 URL 주입 시 바로 표시. */}
+            carter1(소독) 우측 RealSense YOLO 검출 스트림(hmi/backend MJPEG 중계,
+            src/perception/perception/multi_robot_yolo_viewer.py 가 원본). */}
         <div className="monitoring-row">
-          <VisionFeedPanel title="로봇에 부착된 카메라" />
+          <VisionFeedPanel
+            title="비전 (소독 로봇 사람 감지)"
+            streamUrl={`${import.meta.env.VITE_API_BASE}/api/vision/carter1/stream`}
+          />
         </div>
 
         {/* 운영 2열: 큐 | 로그 */}

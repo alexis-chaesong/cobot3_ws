@@ -12,7 +12,7 @@ set -e
 source /opt/ros/humble/setup.bash
 source /home/rokey/IsaacSim-ros_workspaces/humble_ws/install/setup.bash
 source /home/rokey/cobot3_ws/install/setup.bash
-MAP=/home/rokey/IsaacSim-ros_workspaces/humble_ws/src/navigation/carter_navigation/maps/map/modified_hospital_map.yaml
+MAP=/home/rokey/IsaacSim-ros_workspaces/humble_ws/src/navigation/carter_navigation/maps/map/modified_hospital_2_map.yaml
 exec ros2 launch carter_navigation \
   multiple_robot_carter_navigation_modified_hospital.launch.py \
   map:="$MAP" "$@"

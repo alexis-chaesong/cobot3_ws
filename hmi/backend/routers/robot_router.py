@@ -4,12 +4,13 @@
 """
 from __future__ import annotations
 
+import asyncio
 import os
 import struct
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 
 from config import CARTER_IDS, ROBOT_IDS, settings
 from database import get_connection, rows_to_dicts
@@ -103,6 +104,32 @@ async def get_history(robot_id: Optional[str] = None, limit: int = 50):
         conn.close()
 
 
+@router.get("/queue")
+async def get_queue(recent_limit: int = 3):
+    """작업 큐 패널용 — 로봇별 진행 중(RUNNING) 작업 1건 + 최근 완료(DONE) 작업 몇 건.
+    robot_bridge._track_task_history 가 process_state("대기"↔"RUNNING:...")로 tb_task_history 를
+    채운다(자동 임무 기준 — 지도 클릭 경로예약은 프론트 routeQueue.ts 가 별도로 다룸)."""
+    conn = get_connection()
+    try:
+        items: list[dict] = []
+        for rid in ROBOT_IDS:
+            cur = conn.execute(
+                "SELECT * FROM tb_task_history WHERE robot_id = ? AND end_time IS NULL "
+                "ORDER BY start_time DESC LIMIT 1",
+                (rid,),
+            )
+            items.extend(rows_to_dicts(cur.fetchall()))
+            cur = conn.execute(
+                "SELECT * FROM tb_task_history WHERE robot_id = ? AND end_time IS NOT NULL "
+                "ORDER BY end_time DESC LIMIT ?",
+                (rid, recent_limit),
+            )
+            items.extend(rows_to_dicts(cur.fetchall()))
+        return items
+    finally:
+        conn.close()
+
+
 @router.post("/commands/navigate/{robot_id}", response_model=CommandResult)
 async def navigate(robot_id: str, payload: NavigateRequest) -> CommandResult:
     # 자유 클릭 이동은 carter1/carter2(ROS 네임스페이스)만 대상 — waste/disinfect(HMI id)와는 별개 체계.
@@ -138,6 +165,40 @@ async def get_map_image() -> FileResponse:
     if not os.path.isfile(png_path):
         raise HTTPException(status_code=404, detail=f"map 이미지 없음: {png_path}")
     return FileResponse(png_path, media_type="image/png")
+
+
+# ── YOLO 비전 스트림 (웹 VisionFeedPanel) ──
+_MJPEG_BOUNDARY = "frame"
+
+
+async def _mjpeg_generator(carter_id: str):
+    """robot_bridge 가 들고 있는 '최신 annotated JPEG 1장'을 폴링해 MJPEG multipart 로 스트리밍.
+    프레임이 바뀔 때만 내보낸다(뷰어 발행률이 실제 상한 — 여긴 그냥 폴링 주기일 뿐)."""
+    last_frame: Optional[bytes] = None
+    while True:
+        frame = bridge_manager.get_latest_frame(carter_id)
+        if frame is not None and frame is not last_frame:
+            last_frame = frame
+            yield (
+                b"--" + _MJPEG_BOUNDARY.encode() + b"\r\n"
+                b"Content-Type: image/jpeg\r\n"
+                b"Content-Length: " + str(len(frame)).encode() + b"\r\n\r\n"
+                + frame + b"\r\n"
+            )
+        await asyncio.sleep(0.05)
+
+
+@router.get("/vision/{carter_id}/stream")
+async def vision_stream(carter_id: str) -> StreamingResponse:
+    """carterN 의 YOLO annotated 프레임(multi_robot_yolo_viewer.py 발행)을
+    MJPEG(multipart/x-mixed-replace) 로 중계. 프론트 VisionFeedPanel 의 streamUrl 에 그대로
+    넘기면 <img src=...> 로 바로 표시된다(현재는 carter1=소독만 실제 프레임이 들어옴)."""
+    if carter_id not in CARTER_IDS:
+        raise HTTPException(status_code=404, detail=f"알 수 없는 robot_id: {carter_id}")
+    return StreamingResponse(
+        _mjpeg_generator(carter_id),
+        media_type=f"multipart/x-mixed-replace; boundary={_MJPEG_BOUNDARY}",
+    )
 
 
 @router.get("/errors")
