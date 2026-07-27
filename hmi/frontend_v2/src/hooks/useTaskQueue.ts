@@ -17,6 +17,8 @@ import { MOCK } from "../lib/mock/mockSocket";
 import { CARTER_META } from "../constants/carters";
 import { TASK_META } from "../constants/tasks";
 import { useRobotStatusContext } from "../context/RobotStatusContext";
+import { isBeforeHistoryReset } from "../lib/historyResetMarker";
+import { useHistoryResetMarker } from "./useHistoryResetMarker";
 import type { CarterId, QueueItem } from "../types";
 
 const POLL_MS = 3000;
@@ -53,6 +55,7 @@ const MOCK_TASKS: QueueItem[] = [
 export function useTaskQueue(): QueueItem[] {
   const { snapshots } = useRobotStatusContext();
   const [rows, setRows] = useState<TaskRow[]>([]);
+  useHistoryResetMarker(); // 마커 변경 시 리렌더만 트리거(값 자체는 isBeforeHistoryReset 이 읽음)
 
   useEffect(() => {
     if (MOCK) return;
@@ -73,7 +76,9 @@ export function useTaskQueue(): QueueItem[] {
 
   if (MOCK) return MOCK_TASKS;
 
-  return rows.map((row) => {
+  return rows
+    .filter((row) => !isBeforeHistoryReset(row.end_time ?? row.start_time))
+    .map((row) => {
     const meta = CARTER_META[row.robot_id];
     const currentTask = snapshots[row.robot_id]?.task;
     const variant = row.status === "RUNNING" && currentTask

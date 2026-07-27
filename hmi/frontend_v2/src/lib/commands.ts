@@ -76,6 +76,14 @@ export const commands = {
       : apiClient.post("/api/commands/estop", { robot_id: carterId ?? null });
   },
 
+  /** [HMI v2 신규] 로봇 한 대만 긴급정지 해제("START"). 새 작업 배정은 안 함(통합 시작과 다름). */
+  resume: (carterId: CarterId) => {
+    logUiAction(CARTER_META[carterId].label, "동작 재개(긴급정지 해제)를 선택함");
+    return MOCK
+      ? (logMock("resume", carterId), Promise.resolve(null))
+      : apiClient.post(`/api/commands/resume/${carterId}`);
+  },
+
   /** 자유 클릭 내비게이션(단발) — carter1/carter2 를 (x,y,yaw) 로 이동. "이 위치로 이동" 확인 후에만 호출. */
   navigate: (robotId: CarterId, x: number, y: number, yaw = 0) => {
     logUiAction(

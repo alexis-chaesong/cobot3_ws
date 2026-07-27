@@ -17,10 +17,13 @@ body,
 body {
   font-family: var(--font-ui);
   color: var(--ink);
-  background: var(--surface-page);
-  font-size: 14px;
+  /* 평평한 단색 → 은은한 세로 그라데이션으로 깊이감(모던 대시보드 느낌) */
+  background: linear-gradient(180deg, #f3f6fb 0%, var(--surface-page) 42%, #e7ecf3 100%);
+  background-attachment: fixed;
+  font-size: var(--fs-body);
   line-height: 1.45;
   -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
 button {
@@ -36,32 +39,75 @@ p {
   margin: 0;
 }
 
-/* ── 앱 전체 레이아웃 (데스크톱 고정) ── */
+/* 목록/스크롤 영역 스크롤바를 얇고 은은하게 — 패널 내부 스크롤은 허용하되 시각적으로
+   튀지 않게(전체 페이지는 스크롤 없음, 개별 패널 리스트만 넘칠 때 자체 스크롤). */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) transparent;
+}
+*::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+*::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 999px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* ══════════════════════════════════════════════════════════════
+   [2026-07-27 디자인 개편] 대시보드 셸 — 뷰포트(1920×1080 기준, 반응형 축소) 한 화면에
+   전부 들어가도록 고정 그리드로 재구성. 컴포넌트/기능은 전혀 안 바뀜 — App.tsx 는 같은
+   컴포넌트들을 새 그리드 영역 클래스로 감싸기만 한다.
+   ══════════════════════════════════════════════════════════════ */
 .app-shell {
+  display: grid;
+  grid-template-rows: auto 1fr;
+  height: 100vh;
+  max-height: 100vh;
+  overflow: hidden; /* ★스크롤 없음★ — 강사 피드백 핵심 요구사항 */
+  padding: 14px 18px 16px;
+  gap: 12px;
+}
+
+/* 메인 대시보드 그리드 — 좌: 로봇 상태 2장 / 중앙: 내비 지도 / 우: 비전+큐+로그 */
+.dashboard {
+  display: grid;
+  grid-template-columns: minmax(280px, 21%) minmax(0, 1fr) minmax(320px, 25%);
+  gap: 12px;
+  min-height: 0; /* flex/grid 자식이 내부 스크롤을 쓰려면 필수(고전적 오버플로우 함정) */
+}
+
+.dashboard__robots {
   display: flex;
   flex-direction: column;
-  gap: var(--gap-lane);
-  min-height: 100%;
-  padding: var(--gap-lane);
-  max-width: 1680px;
-  margin: 0 auto;
+  gap: 12px;
+  min-height: 0;
+}
+.dashboard__robots > * {
+  flex: 1 1 0;
+  min-height: 0;
 }
 
-/* 2열 그리드 (로봇 레인 / 운영) 공통 */
-.grid-2col {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: var(--gap-lane);
-}
-
-/* 모니터링 행 — 패널 1개를 중앙에 정렬(2열 그리드로 늘리지 않음) */
-.monitoring-row {
+.dashboard__map {
+  min-height: 0;
   display: flex;
-  justify-content: center;
 }
-.monitoring-row > * {
-  width: 100%;
-  max-width: 720px;
+.dashboard__map > * {
+  flex: 1;
+  min-width: 0;
+}
+
+.dashboard__side {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 0;
+}
+.dashboard__side > * {
+  min-height: 0;
 }
 
 /* 재사용 패널 카드 */
@@ -73,9 +119,8 @@ p {
 }
 
 .panel-title {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--ink-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
+  font-size: var(--fs-title);
+  font-weight: 700;
+  color: var(--ink);
+  letter-spacing: -0.01em;
 }

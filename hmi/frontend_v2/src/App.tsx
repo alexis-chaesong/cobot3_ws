@@ -26,25 +26,24 @@ import type { CarterId } from "./types";
 function VisionSection() {
   const [visionCarter, setVisionCarter] = useState<CarterId>("carter1");
   return (
-    <div className="monitoring-row">
-      <div style={{ display: "flex", flexDirection: "column", gap: 8, width: "100%" }}>
-        <div style={{ display: "flex", gap: 8, justifyContent: "center" }}>
-          {CARTER_IDS.map((id) => (
-            <button
-              key={id}
-              type="button"
-              onClick={() => setVisionCarter(id)}
-              aria-pressed={visionCarter === id}
-            >
-              {CARTER_META[id].label}
-            </button>
-          ))}
-        </div>
-        <VisionFeedPanel
-          title={`비전 (${CARTER_META[visionCarter].label} 사람 감지)`}
-          streamUrl={`${import.meta.env.VITE_API_BASE}/api/vision/${visionCarter}/stream`}
-        />
+    <div className="vision-section panel">
+      <div className="vision-section__toggle">
+        {CARTER_IDS.map((id) => (
+          <button
+            key={id}
+            type="button"
+            className={`vision-section__toggle-btn${visionCarter === id ? " vision-section__toggle-btn--active" : ""}`}
+            onClick={() => setVisionCarter(id)}
+            aria-pressed={visionCarter === id}
+          >
+            {CARTER_META[id].label}
+          </button>
+        ))}
       </div>
+      <VisionFeedPanel
+        title={`비전 (${CARTER_META[visionCarter].label} 사람 감지)`}
+        streamUrl={`${import.meta.env.VITE_API_BASE}/api/vision/${visionCarter}/stream`}
+      />
     </div>
   );
 }
@@ -55,28 +54,27 @@ export default function App() {
       <div className="app-shell">
         <TopBar />
 
-        {/* 로봇 레인 2열 */}
-        <div className="grid-2col">
-          {CARTER_IDS.map((id) => (
-            <RobotLane key={id} carterId={id} />
-          ))}
+        {/* [2026-07-27 디자인 개편] 좌: 로봇 상태 2장 / 중앙: 내비 지도 / 우: 비전+큐+로그.
+            컴포넌트는 이전과 동일 — 배치용 그리드 컨테이너만 새로 도입(App.css: .dashboard*). */}
+        <div className="dashboard">
+          <div className="dashboard__robots">
+            {CARTER_IDS.map((id) => (
+              <RobotLane key={id} carterId={id} />
+            ))}
+          </div>
+
+          <div className="dashboard__map">
+            <MapPanel />
+          </div>
+
+          <div className="dashboard__side">
+            <VisionSection />
+            <QueuePanel />
+            <LogPanel />
+          </div>
         </div>
 
-        {/* 자유 클릭 내비게이션 지도 — 별도 행(넓어서 2열 그리드엔 안 어울림) */}
-        <MapPanel />
-
-        {/* 모니터링 — 19_ 은 carter1+carter2 둘 다 우측 RealSense YOLO 검출 스트림이 있어
-            (hmi/backend_v2 MJPEG 중계, src/perception/perception/multi_robot_yolo_viewer.py
-            가 원본) 토글로 전환한다. */}
-        <VisionSection />
-
-        {/* 운영 2열: 큐 | 로그 */}
-        <div className="grid-2col">
-          <QueuePanel />
-          <LogPanel />
-        </div>
-
-        {/* 오류 시에만 렌더 */}
+        {/* 오류 시에만 렌더 — 고정 오버레이라 그리드 레이아웃을 안 밀어냄(AlertBanner.css) */}
         <AlertBanner />
       </div>
     </RobotStatusProvider>

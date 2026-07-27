@@ -99,6 +99,16 @@ async def emergency_stop(payload: EmergencyStopRequest) -> CommandResult:
     return CommandResult(result="SUCCESS", robot_id=payload.robot_id)
 
 
+@router.post("/commands/resume/{robot_id}", response_model=CommandResult)
+async def resume(robot_id: str) -> CommandResult:
+    """[HMI v2 신규] 로봇 하나만 긴급정지 해제("START"). start-all 과 달리 작업을 새로 배정하지
+    않는다 — 로봇별 개별 긴급정지 버튼의 짝(로봇 카드의 "동작 재개" 버튼에서 호출)."""
+    if robot_id not in CARTER_IDS:
+        raise HTTPException(status_code=404, detail=f"알 수 없는 robot_id: {robot_id}")
+    bridge_manager.publish_command("START", robot_id=robot_id)
+    return CommandResult(result="SUCCESS", robot_id=robot_id)
+
+
 @router.get("/history")
 async def get_history(robot_id: Optional[str] = None, limit: int = 50):
     conn = get_connection()

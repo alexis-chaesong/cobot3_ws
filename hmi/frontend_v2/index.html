@@ -4,12 +4,20 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>격리 병동 로봇 관제</title>
-    <!-- 폰트: IBM Plex Sans / Mono (tokens.css의 --font-ui/--font-mono와 일치) -->
+    <!-- [2026-07-27 디자인 개편] 본문 UI 폰트를 Pretendard 로 교체 — 한글+라틴 혼용 가독성이
+         뛰어나고 국내 프로덕트 UI에서 표준처럼 쓰이는 가변 폰트(tokens.css의 --font-ui 와 일치).
+         숫자/좌표/로그 등 고정폭이 필요한 곳은 기존 IBM Plex Mono 유지. -->
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
-      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap"
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&display=swap"
       rel="stylesheet"
+    />
+    <link
+      rel="stylesheet"
+      as="style"
+      crossorigin
+      href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.css"
     />
   </head>
   <body>

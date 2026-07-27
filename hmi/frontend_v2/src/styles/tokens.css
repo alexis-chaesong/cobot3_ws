@@ -1,38 +1,56 @@
 /* ══════════════════════════════════════════════════════════════
    디자인 토큰 — 색/폰트의 단일 원천(single source of truth).
+   [2026-07-27 디자인 개편] "관제실" 톤 → "매니징 대시보드" 톤으로 리프레시(강사 피드백:
+   올드한 디자인/가독성 낮은 폰트/과도하게 큰 상태·내비 영역/스크롤 없이 한 화면에 전부).
+   기능은 전혀 안 건드림 — 색상 의미 매핑(waste=red/disinfect=blue/state-*)과 존재하는 변수명은
+   그대로 유지하고 값·타이포/스페이싱 스케일만 다듬었다.
    🔧 튜닝: 색을 바꾸고 싶으면 여기 값만 수정하면 전체에 반영됩니다.
    ══════════════════════════════════════════════════════════════ */
 :root {
-  /* 표면(배경) 계열 */
-  --surface-page: #f6f8f8;
+  /* 표면(배경) 계열 — slate 기반의 차분하고 트렌디한 쿨 뉴트럴(Tailwind slate 계열 참고) */
+  --surface-page: #eef2f7;
   --surface-panel: #ffffff;
-  --border: #dce3e7;
+  --surface-panel-soft: #f5f8fc; /* 패널 내부 서브 영역(상태 박스 등) */
+  --border: #e3e9f1;
+  --border-strong: #cbd4e0;
 
-  /* 텍스트 */
-  --ink: #1d2b33;
-  --ink-muted: #5c7079;
+  /* 텍스트 — 더 진한 slate 로 대비/가독성 강화 */
+  --ink: #101a2b;
+  --ink-muted: #5a6a80;
+  --ink-faint: #93a1b5;
 
-  /* 폐기물 수거 로봇 = red 계열 (실제 도킹 스테이션 색과 일치) */
-  --waste-accent: #b3433f;
-  --waste-tint: #fbebea;
+  /* 폐기물 수거 로봇 = red 계열 (실제 도킹 스테이션 색과 일치) — 더 선명한 레드로 */
+  --waste-accent: #e0393f;
+  --waste-tint: #fdecec;
 
-  /* 소독 로봇 = blue 계열 */
-  --disinfect-accent: #2f6690;
-  --disinfect-tint: #e8f1f7;
+  /* 소독 로봇 = blue 계열 — 탁한 코퍼레이트 블루 → 선명한 모던 블루 */
+  --disinfect-accent: #2563eb;
+  --disinfect-tint: #e9f1ff;
 
   /* 로봇 상태 색 */
-  --state-running: #1c8577;
-  --state-idle: #888780;
-  --state-error: #c81e3a; /* ⚠ 긴급정지 전용. 다른 요소에 절대 재사용 금지 */
+  --state-running: #10a37f; /* 선명한 emerald-teal */
+  --state-idle: #8b93a0;
+  --state-error: #f5124f; /* ⚠ 긴급정지 전용. 다른 요소에 절대 재사용 금지 — waste 레드와 명확히 구분되는 핫핑크-레드 */
 
-  /* 폰트 */
-  --font-ui: "IBM Plex Sans", -apple-system, BlinkMacSystemFont, sans-serif;
+  /* 폰트 — 본문 UI는 Pretendard(한글 최적화 가변폰트), 데이터/좌표/로그는 IBM Plex Mono 유지 */
+  --font-ui: "Pretendard Variable", Pretendard, -apple-system, BlinkMacSystemFont,
+    system-ui, sans-serif;
   --font-mono: "IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
 
+  /* 타이포 스케일 — 강사/사용자 요청으로 전체적으로 한 단계 키워 가독성 강화(2차 상향).
+     여기 값만 올리면 --fs-* 를 쓰는 모든 요소가 함께 커진다. */
+  --fs-display: 34px; /* 최상단 타이틀 */
+  --fs-title: 18px; /* 패널 제목 */
+  --fs-body: 16px; /* 본문 기본 */
+  --fs-sm: 14.5px;
+  --fs-xs: 13px;
+
   /* ── 파생 토큰 (기획 외 추가: 간격/모서리/그림자 일관성) ── */
-  --radius-sm: 6px;
-  --radius-md: 10px;
-  --gap-lane: 16px;
-  --shadow-panel: 0 1px 2px rgba(29, 43, 51, 0.06),
-    0 2px 8px rgba(29, 43, 51, 0.04);
+  --radius-sm: 9px;
+  --radius-md: 14px;
+  --radius-lg: 18px;
+  --gap-lane: 14px;
+  /* 더 부드럽고 깊이감 있는 그림자 — 모던 대시보드 카드 느낌 */
+  --shadow-panel: 0 1px 2px rgba(16, 26, 43, 0.04), 0 8px 24px rgba(16, 26, 43, 0.07);
+  --shadow-float: 0 12px 34px rgba(16, 26, 43, 0.18);
 }

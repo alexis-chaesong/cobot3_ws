@@ -1,12 +1,41 @@
+/* [2026-07-27 디자인 개편] App.tsx 의 VisionSection 래퍼(토글+피드) — 사이드 컬럼에서
+   비중을 낮춰(우측 칼럼은 큐/로그가 더 중요) 고정 높이로 압축. */
+.vision-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px 12px;
+  flex: 0 0 auto;
+}
+.vision-section__toggle {
+  display: flex;
+  gap: 6px;
+  justify-content: center;
+}
+.vision-section__toggle-btn {
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  padding: 4px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface-panel-soft);
+  color: var(--ink-muted);
+}
+.vision-section__toggle-btn--active {
+  background: var(--ink);
+  border-color: var(--ink);
+  color: #fff;
+}
+
 /* Vision/CCTV 공용 피드 패널 스타일 */
 .feed-panel {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  border-radius: var(--radius-sm);
 }
 .feed-panel__head {
-  padding: 10px 14px;
-  border-bottom: 1px solid var(--border);
+  padding: 0 0 2px;
 }
 .panel-title {
   display: inline-flex;
@@ -17,6 +46,7 @@
 .feed-panel__stage {
   position: relative;
   aspect-ratio: 16 / 9;
+  max-height: 150px;
   background: #0e1519; /* 영상 없는 관제 화면 느낌의 어두운 무대 */
   overflow: hidden;
 }
