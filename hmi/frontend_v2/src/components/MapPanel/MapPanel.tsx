@@ -5,8 +5,9 @@
 // 🔧 튜닝: 로봇 색은 더 이상 고정이 아니라 "현재 배정된 작업"에서 유도(colorForCarter 참고).
 //   미배정이면 중립색(--state-idle).
 import { useEffect, useRef, useState, type MouseEvent } from "react";
-import { Navigation2, Route, X } from "lucide-react";
+import { Navigation2, Route, X, Home } from "lucide-react";
 import { CARTER_IDS, CARTER_META } from "../../constants/carters";
+import { commands } from "../../lib/commands";
 import { TASK_META } from "../../constants/tasks";
 import { useMapInfo } from "../../hooks/useMapInfo";
 import { useRobotPose } from "../../hooks/useRobotPose";
@@ -14,6 +15,7 @@ import { useRouteQueue } from "../../hooks/useRouteQueue";
 import { useRobotStatusContext } from "../../context/RobotStatusContext";
 import { enqueueRoute, cancelRoute } from "../../lib/routeQueue";
 import type { CarterId, MapInfo } from "../../types";
+import type { Pose } from "../../lib/robotPoseStore";
 import "./MapPanel.css";
 
 const ACCENT: Record<"waste" | "disinfect", string> = {
@@ -23,6 +25,21 @@ const ACCENT: Record<"waste" | "disinfect", string> = {
 const NEUTRAL_COLOR = "#888780"; // --state-idle — 작업 미배정 로봇
 const DRAFT_COLOR = "#1c8577";
 const CANVAS_FONT = "10px 'IBM Plex Mono', monospace";
+// ★수동제어 = 대기 + 도킹스테이션일 때만★ : 19_ 는 MANUAL_OVERRIDE 로 제너레이터를 스왑하는
+// 순간 위치와 무관하게 "대기"를 발행하므로(g_task_select_mission 최상단), processStateLabel
+// 만으론 "지금 도킹에 있는지"를 보장 못 한다 — 실좌표까지 같이 확인해야 함. 오차 허용치는
+// 도킹 복귀 시 실측된 x축 편차(~0.35m, g_nav_to_home 은 오픈루프라 반복보정 없음)보다 넉넉하게.
+const DOCK_PROXIMITY_TOLERANCE_M = 0.6;
+// ★긴급정지 중에는 위치 무관하게 수동제어 허용★ : 19_ 의 EMERGENCY_STOP 핸들러가 이 라벨을
+// publish_hmi_state 로 발행한다(코드 "긴급정지" → 와이어 "RUNNING:긴급정지 중" → 백엔드가
+// state 부분 벗겨내 payload="긴급정지 중"만 옴 — startsWith 로 접두만 비교).
+const ESTOP_LABEL_PREFIX = "긴급정지";
+
+function isAtDock(carterId: CarterId, pose: Pose | null): boolean {
+  if (!pose) return false;
+  const dock = CARTER_META[carterId].dock;
+  return Math.hypot(pose.x - dock.x, pose.y - dock.y) <= DOCK_PROXIMITY_TOLERANCE_M;
+}
 
 function worldToPixel(x: number, y: number, mapInfo: MapInfo) {
   const px = (x - mapInfo.originX) / mapInfo.resolution;
@@ -93,6 +110,35 @@ export function MapPanel() {
     } else {
       ctx.fillStyle = "#dce3e7";
       ctx.fillRect(0, 0, canvas.width, canvas.height);
+    }
+
+    // 0) 도킹스테이션 마커(양쪽 로봇) — 집 모양 + "도킹" 라벨. 작업 완료·복귀 지점.
+    for (const id of CARTER_IDS) {
+      const dock = CARTER_META[id].dock;
+      const { px, py } = worldToPixel(dock.x, dock.y, mapInfo);
+      const color = colorForCarter(id);
+      ctx.beginPath();
+      ctx.rect(px - 6, py - 4, 12, 10);
+      ctx.globalAlpha = 0.85;
+      ctx.fillStyle = color;
+      ctx.fill();
+      ctx.globalAlpha = 1;
+      ctx.strokeStyle = "#fff";
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+      ctx.beginPath(); // 지붕
+      ctx.moveTo(px - 8, py - 4);
+      ctx.lineTo(px, py - 11);
+      ctx.lineTo(px + 8, py - 4);
+      ctx.closePath();
+      ctx.fillStyle = color;
+      ctx.fill();
+      ctx.stroke();
+      ctx.fillStyle = color;
+      ctx.font = CANVAS_FONT;
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText("도킹", px, py + 16);
     }
 
     // 1) 등록된 웨이포인트 경로(양쪽 로봇 — 진행 중이면 항상 표시)
@@ -192,9 +238,19 @@ export function MapPanel() {
     }
   }, [mapInfo, poses, routes, draftPoints, imgLoaded, snapshots]);
 
+  // ★수동제어 게이팅★ : 선택된 로봇이 (a) "대기" 상태 + 도킹스테이션 근처, 또는 (b) 긴급정지
+  // 중일 때만 지도 클릭으로 움직일 수 있다(사용자 결정) — 작업 중인데 그냥 조작하면 충돌/작업
+  // 꼬임 위험이 있지만, 긴급정지로 이미 멈춰둔 다음이라면 위치와 무관하게 운영자가 수동으로
+  // 다시 움직여줘야 하므로 예외로 허용.
+  const selectedIdleAndDocked =
+    snapshots[selected]?.state === "idle" && isAtDock(selected, poses[selected]);
+  const selectedEstopped =
+    (snapshots[selected]?.processStateLabel ?? "").startsWith(ESTOP_LABEL_PREFIX);
+  const selectedCanManualControl = selectedIdleAndDocked || selectedEstopped;
+
   const handleCanvasClick = (e: MouseEvent<HTMLCanvasElement>) => {
     const canvas = canvasRef.current;
-    if (!canvas || !mapInfo) return;
+    if (!canvas || !mapInfo || !selectedCanManualControl) return;
     const rect = canvas.getBoundingClientRect();
     // 캔버스 표시 스케일(CSS 크기)과 내부 픽셀 해상도가 다를 수 있어 보정.
     const scaleX = canvas.width / rect.width;
@@ -206,7 +262,7 @@ export function MapPanel() {
   };
 
   const startRoute = () => {
-    if (draftPoints.length === 0) return;
+    if (draftPoints.length === 0 || !selectedCanManualControl) return;
     enqueueRoute(
       selected,
       draftPoints.map((p) => ({ x: p.x, y: p.y, yaw: 0 })),
@@ -225,6 +281,7 @@ export function MapPanel() {
         <span className="panel-title">
           <Navigation2 size={14} /> 내비게이션 지도
         </span>
+        <div className="map-panel__head-right">
         <div className="map-panel__toggle">
           {CARTER_IDS.map((id) => {
             const meta = CARTER_META[id];
@@ -245,6 +302,21 @@ export function MapPanel() {
             );
           })}
         </div>
+        {/* ★도킹 복귀★ : 선택 로봇의 진행 중 작업을 초기화하고 도킹스테이션으로 복귀시킨다.
+            진행 중이던 수동 경로(routeQueue)를 먼저 취소해야 함 — 안 그러면 남은 웨이포인트가
+            LEG_TIMEOUT_MS 뒤에 뒤늦게 재발행돼 도킹 goal_pose 를 덮어쓸 수 있음. */}
+        <button
+          type="button"
+          className="map-panel__dock-btn"
+          title={`${CARTER_META[selected].label} 도킹스테이션으로 복귀(작업 초기화)`}
+          onClick={() => {
+            cancelRoute(selected);
+            commands.dockReturn(selected);
+          }}
+        >
+          <Home size={13} /> 도킹 복귀
+        </button>
+        </div>
       </div>
 
       <div className="map-panel__stage">
@@ -256,7 +328,7 @@ export function MapPanel() {
         ) : (
           <canvas
             ref={canvasRef}
-            className="map-panel__canvas"
+            className={`map-panel__canvas${selectedCanManualControl ? "" : " map-panel__canvas--locked"}`}
             onClick={handleCanvasClick}
           />
         )}
@@ -306,11 +378,17 @@ export function MapPanel() {
           </div>
         ) : (
           !selectedRouteActive &&
-          mapInfo && (
+          mapInfo &&
+          (selectedCanManualControl ? (
             <p className="map-panel__hint">
               지도를 클릭해 {CARTER_META[selected].label}의 이동 경로를 만드세요(여러 지점 가능)
             </p>
-          )
+          ) : (
+            <p className="map-panel__hint map-panel__hint--locked">
+              {CARTER_META[selected].label}이(가) 도킹스테이션에서 대기 중이거나 긴급정지 상태일
+              때만 수동 제어할 수 있습니다
+            </p>
+          ))
         )}
       </div>
     </div>

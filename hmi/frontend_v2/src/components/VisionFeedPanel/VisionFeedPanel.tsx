@@ -5,8 +5,14 @@
 // ★자동 재연결★ : <img> 기반 MJPEG는 연결이 한 번 끊기면(백엔드 재시작, 네트워크 순단 등)
 // 브라우저가 스스로 재연결하지 않는다 — 그대로 두면 새로고침 전까진 화면이 죽어 있다.
 // onError 시 RETRY_MS 후 캐시버스터를 붙여 새 <img>(key 로 강제 리마운트)를 다시 연결한다.
+//
+// ★최초 프레임 타임아웃★ : 백엔드가 스트림 연결 자체는 200 OK로 받아주고(StreamingResponse는
+// 첫 프레임이 없어도 즉시 연결되므로) 업스트림(run_vision_19.sh YOLO 뷰어 프로세스 미기동, Isaac
+// RealSense 초기화 실패 등)이 프레임을 한 장도 안 보내면 <img>는 onError 도 onLoad 도 영영 안 뜬다
+// — 그냥 빈/깨진 이미지로 조용히 멈춰 있어 "화면이 안 뜨는" 것처럼 보인다. LOAD_TIMEOUT_MS 안에
+// onLoad(첫 프레임 디코드)가 없으면 타임아웃으로 간주해 동일한 재시도 루프에 태운다.
 // 🔧 튜닝: 실제 스트림 연결 시 App에서 streamUrl prop만 주입하면 된다. RETRY_MS로 재연결 주기 조절.
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ScanEye } from "lucide-react";
 import "./VisionFeedPanel.css";
 
@@ -25,10 +31,28 @@ interface Props {
 }
 
 const RETRY_MS = 3000;
+const LOAD_TIMEOUT_MS = 6000;
 
 export function VisionFeedPanel({ title = "Vision", streamUrl, boxes = [] }: Props) {
   const [attempt, setAttempt] = useState(0);
   const [errored, setErrored] = useState(false);
+  const loadTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const clearLoadTimeout = () => {
+    if (loadTimeoutRef.current) {
+      clearTimeout(loadTimeoutRef.current);
+      loadTimeoutRef.current = null;
+    }
+  };
+
+  const handleError = () => {
+    clearLoadTimeout();
+    setErrored(true);
+    setTimeout(() => {
+      setErrored(false);
+      setAttempt((n) => n + 1);
+    }, RETRY_MS);
+  };
 
   // streamUrl 자체가 바뀌면(로봇 전환 등) 재시도 상태 리셋
   useEffect(() => {
@@ -36,13 +60,15 @@ export function VisionFeedPanel({ title = "Vision", streamUrl, boxes = [] }: Pro
     setErrored(false);
   }, [streamUrl]);
 
-  const handleError = () => {
-    setErrored(true);
-    setTimeout(() => {
-      setErrored(false);
-      setAttempt((n) => n + 1);
-    }, RETRY_MS);
-  };
+  // 매 연결 시도(streamUrl/attempt 변경)마다 최초 프레임 타임아웃을 건다 — onLoad 가
+  // 오면 정상, LOAD_TIMEOUT_MS 안에 아무 신호도 없으면 업스트림이 죽은 것으로 보고 재시도.
+  useEffect(() => {
+    clearLoadTimeout();
+    if (!streamUrl || errored) return undefined;
+    loadTimeoutRef.current = setTimeout(handleError, LOAD_TIMEOUT_MS);
+    return clearLoadTimeout;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [streamUrl, attempt, errored]);
 
   const src = streamUrl
     ? `${streamUrl}${streamUrl.includes("?") ? "&" : "?"}retry=${attempt}`
@@ -63,6 +89,7 @@ export function VisionFeedPanel({ title = "Vision", streamUrl, boxes = [] }: Pro
             className="feed-panel__img"
             src={src}
             alt="vision feed"
+            onLoad={clearLoadTimeout}
             onError={handleError}
           />
         ) : (

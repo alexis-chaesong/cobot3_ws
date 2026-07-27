@@ -24,6 +24,9 @@
 #   ★ 선행 : Isaac 19_ Play ▶(/clock) → run_nav.sh(Nav2 active + 두 로봇 localize) →
 #     HMI v2 백엔드(hmi/backend_v2, 포트 8001) 실행 후 이 스크립트. 그다음 브라우저(5174)에서
 #     로봇별 작업(trash/spray) 선택.
+#   ⚠ 웹 비전 패널("사람 감지")은 이 스크립트가 안 켠다 — 별도 6번째 터미널로
+#     `~/cobot3_ws/run_vision_19.sh` 를 반드시 같이 띄워야 carter1/carter2 화면이 표시됨
+#     (안 띄우면 backend_v2 로 프레임이 전혀 안 들어와 프론트가 "재연결 중…"만 계속 반복함).
 #   Ctrl+C 한 번이면 두 미션 모두 종료.
 # =====================================================================
 source /opt/ros/humble/setup.bash

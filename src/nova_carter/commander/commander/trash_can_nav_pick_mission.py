@@ -16,13 +16,14 @@ use_sim_time Nav2 노드들이 그 /clock 을 기다리며 같이 멈춰버린�
        (Nav2 bringup 이 먼저 떠 있어야 하고, 4_..._nav_pick_test.py 도 함께 실행 중이어야 함)
 --------------------------------------------------
 """
+import json
 import math
 import time
 
 import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import PoseStamped, Twist
-from std_msgs.msg import Bool
+from std_msgs.msg import Bool, String
 from nav2_simple_commander.robot_navigator import BasicNavigator, TaskResult
 
 from commander.hmi_link import HmiLink
@@ -168,6 +169,58 @@ def main():
         hmi.publish_state("대기", force=True)
     wait_start = hmi is not None and bool(nav.get_parameter("wait_for_hmi_start").value)
 
+    # ★긴급정지 항상 활성 (hmi_enable=False 여도)★
+    #   19_ 은 이 노드를 hmi_enable:=False 로 띄운다(process_state 이중발행 방지) → 위 HmiLink 의
+    #   estop→Nav2 goal 취소 훅이 통째로 꺼져, "Nav2 로 주행 중 웹 긴급정지를 눌러도 안 멈추던" 문제.
+    #   해결 = HmiLink 유무와 무관하게 /robot/command 를 얇게 직접 구독해 EMERGENCY_STOP 시 진행 중
+    #   Nav2 goal 을 취소한다(상태발행은 안 하므로 19_ 의 process_state 와 충돌 없음).
+    #   estop_state["on"] 으로 대기게이트·goal수신을 막아 취소된 goal 즉시 재수락 방지, START 로 해제.
+    estop_state = {"on": False}
+    if hmi is None:
+        _RID_ALIAS = {"disinfect": "carter1", "waste": "carter2"}   # 구 역할고정 alias 호환
+        def _on_cmd_raw(msg):
+            nonlocal last_serviced_xy, last_serviced_t
+            try:
+                d = json.loads(msg.data)
+            except Exception:      # noqa: BLE001
+                return
+            rid = d.get("robotId")
+            rid = _RID_ALIAS.get(rid, rid)
+            if rid not in (None, ns):          # 내 로봇(namespace) 또는 null(전체)만 반응
+                return
+            cmd = d.get("command")
+            if cmd == "EMERGENCY_STOP":
+                estop_state["on"] = True
+                gh = getattr(nav, "goal_handle", None)
+                if gh is not None:
+                    try:
+                        gh.cancel_goal_async()
+                    except Exception:      # noqa: BLE001
+                        pass
+                print(f"[ESTOP] EMERGENCY_STOP 수신 → 진행 중 Nav2 goal 취소 (ns={ns or '(none)'})")
+            elif cmd == "START":
+                estop_state["on"] = False
+                print(f"[ESTOP] START 수신 → 긴급정지 해제 (ns={ns or '(none)'})")
+            elif cmd in ("MANUAL_OVERRIDE", "DOCK_RETURN"):
+                # [2026-07-27 버그 수정] 19_ 이 수동제어/도킹복귀로 새 goal_pose 를 발행해도, 이
+                # 노드는 goToPose() 가 blocking 이라 "현재 진행 중인 leg" 가 끝나기 전엔 새 goal
+                # 을 아예 확인하지 않는다 — 그래서 도킹복귀를 눌러도 로봇이 기존 목적지로 계속
+                # 가거나(carter2 증상), 새 goal 이 직전 도착지점과 GOAL_DEDUP_TOL 이내면 "잔류
+                # 재발행"으로 오판돼 조용히 버려져 19_ 쪽이 도착 신호를 영원히 못 받고 멈춘다
+                # (carter1 증상). estop 과 동일하게 즉시 goal 을 취소하고, dedup 상태도 리셋해
+                # 곧 들어올 새(도킹/수동) goal 이 무시되지 않게 한다. estop_state 는 안 건드림
+                # (여긴 "재개까지 대기"가 아니라 "즉시 새 목적지로 전환"이 목적).
+                gh = getattr(nav, "goal_handle", None)
+                if gh is not None:
+                    try:
+                        gh.cancel_goal_async()
+                    except Exception:      # noqa: BLE001
+                        pass
+                last_serviced_xy = None
+                last_serviced_t = 0.0
+                print(f"[OVERRIDE] {cmd} 수신 → 진행 중 Nav2 goal 취소, 새 목적지 즉시 수신 준비 (ns={ns or '(none)'})")
+        nav.create_subscription(String, "/robot/command", _on_cmd_raw, 10)
+
     # 구간(leg) → 프론트 WASTE_STEPS 라벨 매핑 (PICK→DUMP→RETURN→DOCK)
     DRIVE_LABELS = ["전방 주행", "수거함 이동", "수거통 원위치", "복귀"]
     ARRIVE_LABELS = ["폐기물통 파지", "폐기물 투하", "수거통 원위치", "복귀"]
@@ -187,6 +240,10 @@ def main():
         """게이트: '첫 START 이전' 또는 '긴급정지 이후'에만 멈추고 '대기'를 표시한다.
         구간(leg) 사이 정상 전환에서는 상태를 건드리지 않는다 → 파지/이동 모션 중에
         '대기'가 깜빡이던 문제 해결(폐기물 미션은 leg 마다 이 루프를 다시 돈다)."""
+        # hmi_enable=False 라도 긴급정지 상태면 START(estop_state 해제)까지 대기 → 취소된 주행 재개 방지.
+        while rclpy.ok() and estop_state["on"]:
+            print("[ESTOP] 긴급정지 상태 — START(해제) 대기 중")
+            rclpy.spin_once(nav, timeout_sec=0.1)
         if hmi is None:
             return
         need_wait = hmi.estop or (wait_start and not hmi.active)
@@ -213,7 +270,7 @@ def main():
         goal_pose = None
         while rclpy.ok():
             rclpy.spin_once(nav, timeout_sec=0.5)
-            if hmi is not None and hmi.estop:   # 대기 중 긴급정지 → 다시 게이트로
+            if (hmi is not None and hmi.estop) or estop_state["on"]:   # 대기 중 긴급정지 → 다시 게이트로
                 break
             g = goal_holder["pose"]
             if g is None:
