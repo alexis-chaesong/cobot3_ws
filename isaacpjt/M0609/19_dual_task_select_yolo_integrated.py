@@ -65,6 +65,7 @@ CARTER_START_POSE 가 carter2 스폰 좌표로 하드코딩돼 있어, namespace
 ================================================================================
 """
 import os
+import time
 
 from isaacsim import SimulationApp
 
@@ -1016,13 +1017,39 @@ def rgb_to_ros_image(rgb, stamp=None, frame_id="carter_realsense"):
     return msg
 
 
+_RS_CUDA_GET_RGB_OK = {}      # 카메라 label별 device="cuda" 지원 여부 캐시(1회 확인 후 재사용)
+_RS_TIME_DEBUG = os.environ.get("RS_TIME_DEBUG", "0") == "1"
+
+
 def publish_realsense_frame(cam, pub, frame_id, t):
     """★YOLO 병합★ 18_ 메인루프 인라인 로직을 헬퍼화(c1/c2 재사용, 중복 제거). cam/pub 이 None
-    이면(카메라 비활성/발행자 미준비) 무해하게 통과."""
+    이면(카메라 비활성/발행자 미준비) 무해하게 통과.
+    [2026-07-27 실험] get_rgb() 는 device 인자로 'cuda' 를 받으면 GPU→CPU 복사 없이 GPU 상주
+    (Warp) 배열을 반환할 수 있다(Camera.get_rgb 시그니처 확인) — ROS2 로 내보내려면 결국 CPU
+    numpy 가 필요해서 최종적으로 .numpy() 호출은 하지만, 이 경로가 device 미지정 기본값보다
+    스톨을 줄이는지 확인하기 위한 실험. 실패하면 device 미지정으로 자동 폴백(카메라별 1회만
+    시도 후 결과 캐시 — 매 프레임 재시도 안 함). RS_TIME_DEBUG=1 이면 get_rgb() 소요시간 로그."""
     if cam is None or pub is None:
         return
     try:
-        rgb = cam.get_rgb()
+        use_cuda = _RS_CUDA_GET_RGB_OK.get(frame_id, True)
+        t0 = time.perf_counter() if _RS_TIME_DEBUG else None
+        if use_cuda:
+            try:
+                rgb = cam.get_rgb(device="cuda")
+                if hasattr(rgb, "numpy"):
+                    rgb = rgb.numpy()
+                _RS_CUDA_GET_RGB_OK[frame_id] = True
+            except Exception as e:
+                print(f"[RS][{frame_id}][WARN] get_rgb(device='cuda') 실패({e}) — 기본 device 로 폴백")
+                _RS_CUDA_GET_RGB_OK[frame_id] = False
+                rgb = cam.get_rgb()
+        else:
+            rgb = cam.get_rgb()
+        if _RS_TIME_DEBUG:
+            dt_ms = (time.perf_counter() - t0) * 1000.0
+            print(f"[RS][{frame_id}][TIME] get_rgb(cuda={_RS_CUDA_GET_RGB_OK.get(frame_id)}) "
+                  f"{dt_ms:.2f}ms")
         if rgb is None:
             return
         arr = np.asarray(rgb)
