@@ -86,6 +86,7 @@ from pathlib import Path
 import numpy as np
 import omni.usd
 import omni.timeline
+import omni.graph.core as og
 from pxr import Usd, UsdGeom, UsdPhysics, UsdLux, Sdf, Gf, Vt
 
 from isaacsim.core.api import World
@@ -236,7 +237,7 @@ TARGET_JOINTS_DEG = [-90.0, 101.0, 50.0, -94.0, 91.8, -1.1]
 TUCK_J1_DEG = 10.0
 DUMP_J1_DEG = TUCK_J1_DEG
 DUMP_J6_ROTATE_DEG = -180.0
-DUMP_RAMP_STEPS = 90
+DUMP_RAMP_STEPS = 240
 POST_DUMP_BACKUP_DISTANCE = 0.6
 POST_RETURN_BACKUP_DISTANCE = 0.6
 
@@ -383,6 +384,12 @@ TC_REDOCK_SETTLE_STEPS = 20
 TC_JOINT_RAMP_STEPS = 200
 TC_IK_RETRY_COUNT = 2   # [2026-07-26] IK 실패 시 그 자리(챠시 이동 없음)에서 재시도 횟수(최대 3회 시도)
 TC_TARGET_BIAS_COMPENSATION = np.array([0.006, -0.0003, 0.0])   # URDF-USD 형상 불일치 고정 바이어스
+# [2026-07-28] ★ㄱ자(엘보-업) IK 시드★ — 시드 없이 첫 IK 를 풀면 Lula 가 기본 분기(엘보 낮은 ㄴ자)를
+# 골라 link_3(팔뚝)가 거치대에 매달린 노즐 높이로 가로질러 뻗어 충돌 → 팔이 ~42mm 앞에서 스톨,
+# 그리퍼가 노즐에 못 닿고 크립도 낀 채 실패(라이브 관측). 이 시드로 "손끝만 위에서 수직 하강, 팔뚝은
+# 노즐보다 높게" 자세를 유도해 link_3 충돌을 회피한다. g_tool_change_grasp 의 첫 솔브에 warm_start 로 주면
+# 두 번째("노즐 하강") 솔브가 그 해를 승계해 ㄱ자가 유지된다. (값은 GUI 실측 자세 — 필요 시 튜닝)
+TC_GRASP_SEED_Q = np.radians([0.0, -47.0, -49.0, 0.0, -85.0, 0.0])
 # [2026-07-27 재보정 추가] IK 1회 솔브(_tc_solve_and_ramp)만으로는 챠시 접근 오차(Nav2 핸드오프
 # 오차)가 그대로 그립 실패로 이어지는 구조적 약점이 있었다(38mm 오차 실측, g_tool_change_grasp
 # 참고). g_trash_mission 의 검증된 크립(creep) 패턴을 그대로 이식 — 실측 handle_position 을 향해
@@ -397,6 +404,19 @@ TC_CREEP_SETTLE_STEPS = 5
 # 시도하지 않고 계속 다가가기만 한다. GRIP_TRAVEL(D6 조인트 컴플라이언스 범위)과 동일값으로
 # 시작 — 그 범위 안에서 잡히면 자연스러운 자세로 보정될 여지가 있다.
 TC_CREEP_GRIP_ATTEMPT_RADIUS = 0.015
+# [2026-07-28 재보정 개편] 기존 RMPflow 3단 크립은 (a) 본 파지(Lula IK)와 다른 솔버라 ㄱ자 자세가
+# 풀리고, (b) 반응형이라 목표에 정확히 수렴 못 해 "노즐 위치를 못 잡는" 문제가 있었다. → 본 파지와
+# 동일한 Lula IK 로, handle_position 에서 접근축(-Z)으로 조금씩 눌러 내려가며(press-down) 매 스텝
+# 재그립. 직전 해를 warm_start 로 승계해 ㄱ자 자세 유지 + 정확한 관절해.
+TC_CREEP_PRESS_STEP = 0.005          # 손잡이에 닿았는데 그립 안 될 때 수직(-Z) press-down 1스텝[m]
+TC_CREEP_PRESS_MAX_STEPS = 12        # 재보정 최대 반복(도달한계/그립실패 시 이 횟수로 종료)
+TC_CREEP_JOINT_RAMP_STEPS = 40       # 재보정 각 스텝의 관절 램프(짧게)
+# [2026-07-28] 오차 되먹임 재보정 파라미터. IK 솔브+램프 후 실측 link_6 이 목표에서 |e| 만큼 벗어나면,
+# 그만큼 목표를 반대로 밀어(comp -= e) 재솔브하면 팔이 실제로 handle 에 닿게 된다(닿을 수 있는 경우).
+TC_CREEP_POS_TOL = 0.006             # 이 안이면 "handle 도달"로 보고 press-down 모드로 전환[m]
+TC_CREEP_SAT_RATIO = 0.9             # 오차가 직전의 이 비율 아래로 안 줄면 도달한계로 판단(챠시 문제)
+TC_CREEP_LIFT = 0.04                 # 재보정 XY 정렬 시 살짝 들어올릴 높이[m] — 낮은 자세로 XY 쓸며
+                                     # 노즐 가장자리에 붙는 것 방지(들어올려 XY 정렬 후 수직 하강)
 
 WALL_X = 0.575
 AIM_Y = 0.0
@@ -516,7 +536,7 @@ RS_ON = os.environ.get("RS_ON", "1") == "1"        # False 면 카메라/발행 
 RS_OFFSET = Gf.Vec3d(0.0, -0.30, 0.35)              # chassis 기준 우측(-Y)·살짝 위.
 RS_RESOLUTION = (320, 240)      # ★YOLO용★ 저해상도(근접 사람 감지엔 충분, render product 부담↓)
 RS_FOCAL = 14.0                                    # mm. ↓=광각(가까운 사람 잘 봄) / ↑=협각
-RS_PUBLISH_EVERY = int(os.environ.get("RS_PUBLISH_EVERY", "15"))  # 메인 루프 N스텝마다 1프레임 발행
+RS_PUBLISH_EVERY = int(os.environ.get("RS_PUBLISH_EVERY", "30"))  # 메인 루프 N스텝마다 1프레임 발행
 # [2026-07-27 시도·롤백] RS_PUBLISH_EVERY(15)가 RENDER_EVERY(3)의 배수라 읽기 스텝이 항상 렌더
 # 트리거 스텝과 겹친다는 점에 착안, 렌더와 안 겹치게 읽기를 몇 스텝 늦추는 RS_READ_DELAY_STEPS 를
 # 시도했으나 라이브 실측 결과 캐스터 보정이 오히려 더 나빠져 롤백함(가설 반증 또는 역효과가 더 큼,
@@ -751,6 +771,38 @@ def boost_drive_limits(carter_prim_path):
                 if a and a.IsValid():
                     a.Set(float(val)); n += 1
     print(f"[DRIVE] {carter_prim_path} 차동구동 클램프 상향 attr {n}")
+
+
+def setup_ros2_camera_publisher(camera_prim_path, topic_name, frame_id, resolution, graph_path):
+    """isaacsim.ros2.bridge 의 ROS2 Camera Helper OmniGraph를 코드로 구성해
+    카메라 이미지를 sensor_msgs/Image 로 백그라운드에서 발행합니다 (get_rgb 스톨 방지)."""
+    import omni.graph.core as og
+    keys = og.Controller.Keys
+    (graph, _, _, _) = og.Controller.edit(
+        {"graph_path": graph_path, "evaluator_name": "execution"},
+        {
+            keys.CREATE_NODES: [
+                ("OnTick", "omni.graph.action.OnPlaybackTick"),
+                ("CreateRenderProduct", "isaacsim.core.nodes.IsaacCreateRenderProduct"),
+                ("CameraHelperRGB", "isaacsim.ros2.bridge.ROS2CameraHelper"),
+            ],
+            keys.CONNECT: [
+                ("OnTick.outputs:tick", "CreateRenderProduct.inputs:execIn"),
+                ("CreateRenderProduct.outputs:execOut", "CameraHelperRGB.inputs:execIn"),
+                ("CreateRenderProduct.outputs:renderProductPath", "CameraHelperRGB.inputs:renderProductPath"),
+            ],
+            keys.SET_VALUES: [
+                ("CreateRenderProduct.inputs:cameraPrim", camera_prim_path),
+                ("CreateRenderProduct.inputs:width", resolution[0]),
+                ("CreateRenderProduct.inputs:height", resolution[1]),
+                ("CameraHelperRGB.inputs:topicName", topic_name),
+                ("CameraHelperRGB.inputs:frameId", frame_id),
+                ("CameraHelperRGB.inputs:type", "rgb"),
+            ],
+        },
+    )
+    print(f"[RS] OmniGraph Camera Helper 생성 완료: {graph_path} -> {topic_name}")
+    return graph
 
 
 def tune_arm_drives(root_path):
@@ -1553,6 +1605,19 @@ def g_dump_into_big_trash(ctx):
     yield from g_ramp_to_joint_positions(ctx, dump_deg, DUMP_RAMP_STEPS)
     print(f"[INFO][{ctx.name}] big_trash 덤프 완료 (j1={DUMP_J1_DEG}, j6+={DUMP_J6_ROTATE_DEG})")
 
+    print(f"[INFO][{ctx.name}] 쓰레기통 털기 (위아래 흔들기)")
+    shake_steps = 20
+    shake_amp = 15.0
+    for _ in range(2):
+        shake_up = list(dump_deg)
+        shake_up[4] += shake_amp  # joint_5 위로
+        yield from g_ramp_to_joint_positions(ctx, shake_up, shake_steps)
+        shake_down = list(dump_deg)
+        shake_down[4] -= shake_amp  # joint_5 아래로
+        yield from g_ramp_to_joint_positions(ctx, shake_down, shake_steps)
+    
+    yield from g_ramp_to_joint_positions(ctx, dump_deg, shake_steps)
+
 
 def g_restore_upright_after_dump(ctx):
     cur = ctx.robot.get_joint_positions()
@@ -1645,7 +1710,7 @@ def g_tool_change_grasp(ctx):
     ik.set_robot_base_pose(base_pos, base_quat)
 
     q_above, ok_above = yield from _tc_solve_and_ramp(
-        ctx, ik, handle_position + TC_EE_OFFSET, handle_orientation, None, TC_JOINT_RAMP_STEPS, "노즐 상공 접근")
+        ctx, ik, handle_position + TC_EE_OFFSET, handle_orientation, TC_GRASP_SEED_Q, TC_JOINT_RAMP_STEPS, "노즐 상공 접근")
     if not ok_above:
         return False
     q_grasp, ok_grasp = yield from _tc_solve_and_ramp(
@@ -1658,54 +1723,61 @@ def g_tool_change_grasp(ctx):
     for _ in range(TC_GRASP_SETTLE_STEPS):
         yield
     if not tc.surface_gripper.is_closed():
-        # [2026-07-27 재보정 추가] IK 1회 솔브가 챠시 접근오차(Nav2 핸드오프 오차)를 그대로 물려받아
-        # 그립범위(MAX_GRIP_DISTANCE=0.04m)를 놓친 경우 — g_trash_mission 의 크립(creep) 패턴을 그대로
-        # 이식해 실측 handle_position 을 향해 RMPflow 로 조금씩 다가가며 매 스텝 재그립 시도.
-        # [2026-07-27 라이브 사고 대응] "노즐 하강" 직후(=이미 손잡이 높이) 상태 그대로 옆으로
-        # 크립하면 hold_joint 로 아직 고정돼 있는 노즐 본체와 부딪혀 챠시까지 흔들리는 사고가
-        # 실제로 발생함 — 반드시 "상공 접근"과 같은 안전 고도로 먼저 들어올린 뒤(1), 그 고도를
-        # 유지한 채 XY 만 목표 바로 위로 맞추고(2), 마지막에 그 자리서 수직으로만 하강(3)한다.
-        print(f"[TOOLCHANGE][{ctx.name}][WARN] 노즐 하강 직후 파지 실패 — 크립 재시도 시작 "
-              f"(최대 {TC_CREEP_MAX_STEPS}스텝×{TC_CREEP_STEP_SIZE * 1000:.0f}mm)")
+        # [2026-07-28 오차 되먹임 재보정] 기존 RMPflow 3단 크립은 본 파지(Lula IK)와 다른 솔버라 ㄱ자
+        # 자세가 풀리고 반응형이라 목표 수렴이 부정확했다. → 본 파지와 동일한 Lula IK 로, IK 솔브+램프
+        # 뒤 실측 link_6 오차 e = (실제 − handle) 를 목표에 되먹여(comp -= e) 팔이 실제로 handle 에
+        # 닿게 만든다. handle 에 닿았는데(|e|<POS_TOL) 그립만 안 되면 접촉면까지 -Z press-down. 오차가
+        # 안 줄어들면(도달한계·충돌) 팔로는 못 고치는 상황이므로 중단(챠시 재위치 필요).
+        print(f"[TOOLCHANGE][{ctx.name}][WARN] 파지 실패 — 오차 되먹임 재보정 시작(상공경유, 최대 {TC_CREEP_PRESS_MAX_STEPS}회)")
         handle_position_arr = np.asarray(handle_position)
-        lift_target = handle_position_arr + TC_EE_OFFSET
-
-        print(f"[TOOLCHANGE][{ctx.name}] 크립 1/3: 안전 고도로 들어올림")
-        yield from g_creep_to(ctx, lift_target, handle_orientation)
-
-        print(f"[TOOLCHANGE][{ctx.name}] 크립 2/3: 고도 유지한 채 목표 바로 위로 수평이동")
-        above_target = np.array([handle_position_arr[0], handle_position_arr[1], lift_target[2]])
-        yield from g_creep_to(ctx, above_target, handle_orientation)
-
-        print(f"[TOOLCHANGE][{ctx.name}] 크립 3/3: 목표 위에서 수직 하강하며 재그립")
-        creep_start = get_prim_world_position(ctx.ee_path)
-        to_handle = handle_position_arr - creep_start
-        remaining = float(np.linalg.norm(to_handle))
-        creep_dir = to_handle / remaining if remaining > 1e-6 else np.array([0.0, 0.0, -1.0])
-        current_target = creep_start.copy()
+        warm = q_grasp if ok_grasp else q_above     # ㄱ자 해 승계(반응형 초기화 없음)
+        comp = np.zeros(3)                           # 도달오차 되먹임 보정(주로 XY)
+        press_offset = 0.0                           # 닿았는데 그립 안 될 때 접촉면 수직 탐색 깊이[m]
+        lift = np.array([0.0, 0.0, TC_CREEP_LIFT])
+        prev_err = None
         gripped_ok = False
-        for creep_step in range(TC_CREEP_MAX_STEPS):
-            current_target = current_target + creep_dir * TC_CREEP_STEP_SIZE
-            for _ in range(TC_CREEP_SETTLE_STEPS):
-                yield
-                ctx.robot.apply_action(ctx.rmpflow.forward(
-                    target_end_effector_position=current_target, target_end_effector_orientation=handle_orientation))
-            # [2026-07-27] target 에 TC_CREEP_GRIP_ATTEMPT_RADIUS 안으로 들어오기 전엔 grip 을 시도하지
-            # 않는다 — 그립범위(0.04m) 가장자리에서 바로 잡혀 노즐이 삐딱하게 붙는 것 방지.
-            remaining_now = float(np.linalg.norm(handle_position_arr - current_target))
-            if remaining_now > TC_CREEP_GRIP_ATTEMPT_RADIUS:
-                continue
+        for creep_step in range(TC_CREEP_PRESS_MAX_STEPS):
+            goal = handle_position_arr - np.array([0.0, 0.0, press_offset])   # 이번에 닿으려는 점
+            target = goal + comp
+            # (a) ★살짝 들어올린 고도에서 XY 정렬★ — 낮은 자세로 XY 를 쓸면 노즐 가장자리에 붙으므로,
+            #     반드시 Z 를 TC_CREEP_LIFT 만큼 올린 상태로 XY 를 맞춘다.
+            q_up, ok_up = yield from _tc_solve_and_ramp(
+                ctx, ik, target + lift, handle_orientation, warm, TC_CREEP_JOINT_RAMP_STEPS,
+                f"재보정 {creep_step + 1} 상공정렬(Z+{TC_CREEP_LIFT * 1000:.0f}mm)")
+            if not ok_up:
+                print(f"[TOOLCHANGE][{ctx.name}] 상공정렬 IK 도달한계 — 중단(챠시 재위치 필요)")
+                break
+            warm = q_up
+            # (b) 그 자리서 수직 하강만
+            q_dn, ok_dn = yield from _tc_solve_and_ramp(
+                ctx, ik, target, handle_orientation, warm, TC_CREEP_JOINT_RAMP_STEPS,
+                f"재보정 {creep_step + 1} 수직하강")
+            if not ok_dn:
+                print(f"[TOOLCHANGE][{ctx.name}] 하강 IK 도달한계 — 중단(챠시 재위치 필요)")
+                break
+            warm = q_dn
+            actual = get_prim_world_position(ctx.ee_path)
+            err = actual - goal
+            err_norm = float(np.linalg.norm(err))
             tc.surface_gripper.close()
             if tc.surface_gripper.is_closed():
                 gripped_ok = True
-                traveled_mm = float(np.linalg.norm(current_target - creep_start)) * 1000
-                print(f"[TOOLCHANGE][{ctx.name}] 크립 파지 성공 (creep {creep_step + 1}/{TC_CREEP_MAX_STEPS}, "
-                      f"누적 이동={traveled_mm:.1f}mm, 목표까지 잔여={remaining_now * 1000:.1f}mm)")
+                print(f"[TOOLCHANGE][{ctx.name}] 크립 파지 성공 (재보정 {creep_step + 1}회, 잔여오차 {err_norm * 1000:.1f}mm, "
+                      f"press {press_offset * 1000:.0f}mm)")
                 break
+            if err_norm > TC_CREEP_POS_TOL:
+                # 아직 목표에 못 닿음 → 도달오차 되먹임(다음 반복에서 상공 XY 로 반영). 오차가 안 줄면 도달한계.
+                if prev_err is not None and err_norm > prev_err * TC_CREEP_SAT_RATIO:
+                    print(f"[TOOLCHANGE][{ctx.name}] 오차가 안 줄어듦({err_norm * 1000:.1f}mm) — 도달한계·충돌로 판단, "
+                          f"중단(챠시 재위치 필요)")
+                    break
+                comp = comp - err
+            else:
+                # 목표엔 닿았는데 그립만 안 됨 → 접촉면까지 수직으로 더 내려가 탐색(다음 반복도 상공경유)
+                press_offset += TC_CREEP_PRESS_STEP
+            prev_err = err_norm
         if not gripped_ok:
-            print(f"[TOOLCHANGE][{ctx.name}][FAIL] 노즐 파지 실패 "
-                  f"(크립 {TC_CREEP_MAX_STEPS}회 소진, {TC_CREEP_MAX_STEPS * TC_CREEP_STEP_SIZE * 1000:.0f}mm "
-                  f"이내 그립 안 됨)")
+            print(f"[TOOLCHANGE][{ctx.name}][FAIL] 노즐 파지 실패 (오차 되먹임 재보정 {TC_CREEP_PRESS_MAX_STEPS}회 소진/중단)")
             yield from g_ramp_to_joint_positions(ctx, np.degrees(q_above), TC_JOINT_RAMP_STEPS)
             return False
 
@@ -1729,14 +1801,17 @@ def g_tool_change_release(ctx):
     """노즐을 자기 전용 거치대에 반납. 성공 시 ctx.holding_nozzle=False, hold_joint 재체결,
     fingertip_offset 리셋. 반환값 = release_ok(bool)."""
     tc = ctx.tool_changer
-    yield from g_ramp_to_joint_positions(ctx, np.degrees(STOW_Q), SPRAY_ENTRY_RAMP_STEPS)
+    # [2026-07-28] 반납 시 거쳐가는 중간자세를 STOW_Q → ㄱ자(엘보-업)로. 팔뚝(link_3)이 거치대 노즐
+    # 높이로 가로지르지 않게(파지와 동일 이유). 이어지는 "거치대 상공 복귀" IK 도 같은 ㄱ자 시드로
+    # 승계해(아래) 반납 접근 내내 ㄱ자를 유지한다.
+    yield from g_ramp_to_joint_positions(ctx, np.degrees(TC_GRASP_SEED_Q), SPRAY_ENTRY_RAMP_STEPS)
     stand_position, stand_orientation = tc.stand_return_target()
     base_pos, base_quat = read_world_pose(f"{ctx.arm_root}/base_link")
     ik = mg.LulaKinematicsSolver(robot_description_path=IK_DESCRIPTION_PATH, urdf_path=IK_URDF_PATH)
     ik.set_robot_base_pose(base_pos, base_quat)
 
     q_above, ok_above = yield from _tc_solve_and_ramp(
-        ctx, ik, stand_position + TC_EE_OFFSET, stand_orientation, None, TC_JOINT_RAMP_STEPS, "거치대 상공 복귀")
+        ctx, ik, stand_position + TC_EE_OFFSET, stand_orientation, TC_GRASP_SEED_Q, TC_JOINT_RAMP_STEPS, "거치대 상공 복귀")
     if not ok_above:
         return False
     q_down, ok_down = yield from _tc_solve_and_ramp(
@@ -2414,22 +2489,17 @@ def main():
     # 상태에 등록하는데, reset() 이 그 상태를 갈아엎은 뒤 등록하면 render product 가 카메라와
     # 제대로 안 붙어 cam.get_rgb() 가 계속 None/구값만 반환할 수 있다(예외 없이 조용히 실패 —
     # 웹 비전 패널이 "YOLO 인식엔 문제 없어 보이는데 화면만 안 뜨는" 것처럼 보이는 근본 원인).
-    c1_rs_cam = None
     if c1_rs_path is not None:
         try:
-            c1_rs_cam = Camera(prim_path=c1_rs_path, name="c1_realsense",
-                               resolution=RS_RESOLUTION, frequency=30)
+            setup_ros2_camera_publisher(c1_rs_path, C1_RS_TOPIC, C1_RS_FRAME_ID, RS_RESOLUTION, "/World/C1_CameraGraph")
         except Exception:
-            print("[RS][carter1][WARN] Camera 래퍼 생성 실패 — 비활성 처리")
-            c1_rs_cam = None
-    c2_rs_cam = None
+            print("[RS][carter1][WARN] OmniGraph Camera 생성 실패")
+            
     if c2_rs_path is not None:
         try:
-            c2_rs_cam = Camera(prim_path=c2_rs_path, name="c2_realsense",
-                               resolution=RS_RESOLUTION, frequency=30)
+            setup_ros2_camera_publisher(c2_rs_path, C2_RS_TOPIC, C2_RS_FRAME_ID, RS_RESOLUTION, "/World/C2_CameraGraph")
         except Exception:
-            print("[RS][carter2][WARN] Camera 래퍼 생성 실패 — 비활성 처리")
-            c2_rs_cam = None
+            print("[RS][carter2][WARN] OmniGraph Camera 생성 실패")
 
     c1_robot = c1_ee_path = c1_tool0_path = None
     if en_c1:
@@ -2448,26 +2518,7 @@ def main():
     for _ in range(5):
         my_world.step(render=False)
 
-    # ★YOLO 병합★ reset 이후엔 초기화+워밍업만(래퍼는 위에서 이미 reset 전에 생성됨). 실패해도
-    # 해당 로봇만 None 폴백 — 다른 로봇/미션 진행에는 영향 없음(18_ 관례).
-    if c1_rs_cam is not None:
-        try:
-            c1_rs_cam.initialize()
-            for _ in range(30):
-                my_world.step(render=True)
-            print(f"[RS][carter1] 카메라 초기화 완료 ({RS_RESOLUTION[0]}x{RS_RESOLUTION[1]})")
-        except Exception:
-            print("[RS][carter1][WARN] 카메라 초기화 실패 — 비활성 처리")
-            c1_rs_cam = None
-    if c2_rs_cam is not None:
-        try:
-            c2_rs_cam.initialize()
-            for _ in range(30):
-                my_world.step(render=True)
-            print(f"[RS][carter2] 카메라 초기화 완료 ({RS_RESOLUTION[0]}x{RS_RESOLUTION[1]})")
-        except Exception:
-            print("[RS][carter2][WARN] 카메라 초기화 실패 — 비활성 처리")
-            c2_rs_cam = None
+
 
     rclpy.init()
     ros_node = rclpy.create_node("dual_task_select_yolo_controller")
@@ -2536,14 +2587,7 @@ def main():
     c1_gate = PersonGate(ros_node, C1_PERSON_ALERT, my_world, "carter1") if en_c1 else None
     c2_gate = PersonGate(ros_node, C2_PERSON_ALERT, my_world, "carter2") if en_c2 else None
 
-    _img_qos = QoSProfile(reliability=ReliabilityPolicy.BEST_EFFORT,
-                          history=HistoryPolicy.KEEP_LAST, depth=1)
-    c1_rs_pub = ros_node.create_publisher(RosImage, C1_RS_TOPIC, _img_qos) if c1_rs_cam is not None else None
-    c2_rs_pub = ros_node.create_publisher(RosImage, C2_RS_TOPIC, _img_qos) if c2_rs_cam is not None else None
-    if c1_rs_pub is not None:
-        print(f"[RS][carter1] 이미지 발행 준비: {C1_RS_TOPIC} (BEST_EFFORT)")
-    if c2_rs_pub is not None:
-        print(f"[RS][carter2] 이미지 발행 준비: {C2_RS_TOPIC} (BEST_EFFORT)")
+
 
     trash_lock = {"holder": None}
     spray_lock = {"holder": None}
@@ -2655,13 +2699,7 @@ def main():
             clock_pub.publish(cmsg)
             rclpy.spin_once(ros_node, timeout_sec=0.0)
 
-            # ★YOLO 병합★ N스텝마다 우측 RealSense 프레임 발행(뷰어가 구독해 YOLO 추론).
-            # [2026-07-27] RS_READ_DELAY_STEPS(렌더 스텝과 안 겹치게 읽기를 늦추는 시도)를 라이브
-            # 실측했더니 캐스터 보정이 오히려 더 나빠져서 롤백 — 가설(스톨 감소)이 틀렸거나 최소한
-            # 역효과가 더 컸다. 원인은 아직 미확정, 원래(렌더 스텝과 겹쳐도 됨) 방식으로 복귀.
-            if step_i % RS_PUBLISH_EVERY == 0:
-                publish_realsense_frame(c1_rs_cam, c1_rs_pub, C1_RS_FRAME_ID, t)
-                publish_realsense_frame(c2_rs_cam, c2_rs_pub, C2_RS_FRAME_ID, t)
+
 
             if not my_world.is_playing():
                 continue
