@@ -452,7 +452,7 @@ SPRAY_FX_ON = True
 SPRAY_MAX = 700
 SPRAY_RATE = 12
 SPRAY_SPEED = 2.5
-SPRAY_CONE_DEG = 120.0
+SPRAY_CONE_DEG = 35.0     # 분사 콘 half-angle[deg]. ↓=좁게 집중(직선 분사) / ↑=넓게 퍼짐(120=거의 전방향)
 SPRAY_LIFETIME = 0.5
 SPRAY_GRAVITY = -2.0
 SPRAY_SIZE = 0.012
@@ -1445,8 +1445,10 @@ def g_rotate_in_place(ctx, target_yaw, kp, kd, w_max, max_w_step, tol, chassis_p
     prev_yaw = get_chassis_yaw(chassis_path); w_applied = 0.0; settled = 0
     for _ in range(max_steps):
         yield
-        if (ctx.person_gate is not None and ctx.person_gate.blocked()) or \
-           (ctx.estop_flags is not None and ctx.estop_flags.get(ctx.name, False)):
+        # [2026-07-28] 사람감지(person_gate)는 ★소독 스윕(g_spray_sweep)에서만★ 정지시킨다(사용자 결정).
+        # 주행 최종접근 구간에선 사람감지로 멈추지 않음 — 도킹/복귀 중 사람 근접에 멈추던 문제 제거.
+        # (주행 중 사람회피는 Nav2 costmap 담당.) 단, 웹 긴급정지 estop 은 안전상 여기서도 계속 반응.
+        if ctx.estop_flags is not None and ctx.estop_flags.get(ctx.name, False):
             ctx.cmd_pub.publish(Twist())
             continue
         yaw = get_chassis_yaw(chassis_path)
@@ -1486,8 +1488,10 @@ def g_drive_straight_open_loop(ctx, distance, chassis_path, speed=FINAL_APPROACH
     prev_yaw = target_yaw; w_applied = 0.0
     for step in range(max_steps):
         yield
-        if (ctx.person_gate is not None and ctx.person_gate.blocked()) or \
-           (ctx.estop_flags is not None and ctx.estop_flags.get(ctx.name, False)):
+        # [2026-07-28] 사람감지(person_gate)는 ★소독 스윕(g_spray_sweep)에서만★ 정지시킨다(사용자 결정).
+        # 주행 최종접근 구간에선 사람감지로 멈추지 않음 — 도킹/복귀 중 사람 근접에 멈추던 문제 제거.
+        # (주행 중 사람회피는 Nav2 costmap 담당.) 단, 웹 긴급정지 estop 은 안전상 여기서도 계속 반응.
+        if ctx.estop_flags is not None and ctx.estop_flags.get(ctx.name, False):
             ctx.cmd_pub.publish(Twist())
             continue
         pos_xy = get_prim_world_position(chassis_path)[:2]
