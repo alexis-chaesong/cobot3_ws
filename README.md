@@ -1,7 +1,7 @@
 # 격리 병동 소독 · 폐기물 수거 협동 로봇 시스템
 
-> 디지털 트윈(NVIDIA Isaac Sim) 기반 로봇 자동화 시뮬레이션 시스템 구현 프로젝트
-> [두산로보틱스] 지능형 로보틱스 엔지니어 · 협동-3 · B그룹 4조 **불사조**
+> 협동-3:디지털 트윈(NVIDIA Isaac Sim) 기반 로봇 자동화 시뮬레이션 시스템 구현 프로젝트
+> [두산로보틱스] 지능형 로보틱스 엔지니어 · B그룹 4조 **불사조**
 
 감염병 격리 병동에서 의료진이 직접 수행하던 **소독 분사**와 **폐기물 수거** 업무를
 Nova Carter(모바일 베이스) + Doosan M0609(6축 협동로봇 팔)로 구성된 로봇 2대가 병렬 수행하고,
@@ -272,7 +272,7 @@ export PYTHONUNBUFFERED=1
 
 ```bash
 # 백엔드 — CORS 허용 origin
-export HMI_CORS_ORIGIN="http://<접속할_PC_IP>:5173"
+export HMI_CORS_ORIGIN="http://<접속할_PC_IP>:5174"
 ```
 
 ```bash
@@ -301,7 +301,7 @@ VITE_WS_URL=ws://<서버_IP>:8001/ws/robot/status
 #### ① Isaac Sim — 시뮬레이션 및 로봇 제어
 
 ```bash
-source ~/cobot3_ws/setup_env.sh
+export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:$HOME/dev_ws/isaac_sim/isaacsim/_build/linux-x86_64/release/exts/isaacsim.ros2.bridge/humble/lib
 cd ~/cobot3_ws/isaacpjt/M0609
 isaac_python 19_dual_task_select_yolo_integrated.py
 ```
@@ -311,7 +311,7 @@ isaac_python 19_dual_task_select_yolo_integrated.py
 #### ② Nav2 — 자율주행 스택
 
 ```bash
-source ~/cobot3_ws/setup_env.sh
+source /opt/ros/humble/setup.bash
 ~/cobot3_ws/run_nav.sh
 ```
 
@@ -320,7 +320,7 @@ RViz2에서 두 로봇의 맵과 위치가 정상 표시되는지 확인합니�
 #### ③ Backend — FastAPI 관제 서버
 
 ```bash
-source ~/cobot3_ws/setup_env.sh
+source /opt/ros/humble/setup.bash
 cd ~/cobot3_ws/hmi/backend_v2
 uvicorn main:app --host 0.0.0.0 --port 8001
 ```
@@ -330,7 +330,7 @@ uvicorn main:app --host 0.0.0.0 --port 8001
 #### ④ Mission — 미션 노드
 
 ```bash
-source ~/cobot3_ws/setup_env.sh
+source /opt/ros/humble/setup.bash
 ~/cobot3_ws/run_missions_19_hmi.sh
 ```
 
@@ -342,7 +342,7 @@ source ~/cobot3_ws/setup_env.sh
 #### ⑤ Vision — YOLO 사람 감지
 
 ```bash
-source ~/cobot3_ws/setup_env.sh
+source /opt/ros/humble/setup.bash
 cd ~/cobot3_ws
 ~/cobot3_ws/run_vision_19.sh
 ```
@@ -350,7 +350,9 @@ cd ~/cobot3_ws
 #### ⑥ Frontend — 관제 대시보드
 
 ```bash
+source /opt/ros/humble/setup.bash
 cd ~/cobot3_ws/hmi/frontend_v2
+npm install
 npm run dev
 ```
 
