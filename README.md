@@ -12,6 +12,9 @@
 git blob으로 저장되어 있어 별도 `git lfs pull` 없이 받은 그대로 바로 씁니다. 이후 셋업은 아래
 "새 머신에서 받았을 때 (로컬 환경 셋업)" 절을 따르세요.
 
+
+> 발표자료 및 시연영상 링크: https://drive.google.com/drive/folders/10hQ-VqW6WUHgeO0_pgm_H9Rw8jUdM-wU?usp=drive_link
+
 ## 📌 폴더 구조
 
 ```
